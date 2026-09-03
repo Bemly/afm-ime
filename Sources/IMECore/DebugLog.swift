@@ -1,9 +1,13 @@
 import Foundation
 
-/// 调试日志:仅在 AFM_DEBUG=1 时写文件(默认 /tmp/afm-ime.log,可用 AFM_LOG 覆盖)。
+/// 调试日志:debug 开关 = AFM_DEBUG=1 环境变量 或 存在标志文件 /tmp/afm-ime-debug
+/// (launchd 拉起的进程拿不到 shell 环境变量,所以用标志文件)。日志写 /tmp/afm-ime.log(AFAM_LOG 可覆盖)。
 /// error 级别不受开关限制(崩溃排查必需),额外写 NSLog 进统一日志。
 public enum DebugLog {
-    public static let isDebug = ProcessInfo.processInfo.environment["AFM_DEBUG"] == "1"
+    public static var isDebug: Bool {
+        ProcessInfo.processInfo.environment["AFM_DEBUG"] == "1"
+            || FileManager.default.fileExists("/tmp/afm-ime-debug")
+    }
     public static var logPath: String {
         ProcessInfo.processInfo.environment["AFM_LOG"] ?? "/tmp/afm-ime.log"
     }
