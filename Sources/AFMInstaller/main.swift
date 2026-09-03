@@ -2,17 +2,17 @@ import AppKit
 import SwiftUI
 import IMECore
 
-// AFM拼音安装器:一键 安装→注册→启用→选中;失败可一键直达输入源设置
+// AFM拼音安装器:安装 → 一键注销 → (重登)完成启用;全程 GUI 化的首次安装流程
 final class InstallModel: ObservableObject {
     @Published var status = IMEInstaller.statusSummary()
-    @Published var log = "TIS 三连:TISRegisterInputSource → TISEnableInputSource → TISSelectInputSource\n(TISEnable 对未公证包静默无效时,自动 defaults 直写兜底)\n\n"
+    @Published var log = "首次安装流程:① 安装并启用输入法 → ② 一键注销 → ③ 重新登录 → ④ 点「重登后:完成启用」\n(仅首次需要注销;之后装卸永久生效)\n\n"
 
     func refresh() {
         status = IMEInstaller.statusSummary()
     }
 
     func install() {
-        var l = "———— 安装 ————\n"
+        var l = "———— ① 安装 ————\n"
         let embedded = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(IMEInstaller.imeAppName)")
         guard FileManager.default.fileExists(atPath: embedded.path) else {
             l += "✗ 安装器资源里没有 IME bundle(打包不完整)\n"
@@ -21,10 +21,23 @@ final class InstallModel: ObservableObject {
         l += IMEInstaller.install(embeddedIMEURL: embedded)
         let e = IMEInstaller.enable()
         l += e.log
-        if e.ok {
-            let s = IMEInstaller.select()
-            l += s.log
-        }
+        l += "———— 完成 ————\n"
+        log = l + log
+        refresh()
+    }
+
+    func logout() {
+        var l = "———— ② 一键注销 ————\n"
+        l += IMEInstaller.requestLogout()
+            ? "✓ 已触发注销(若弹出确认框,请点「注销」)…\n"
+            : "✗ 触发失败,请手动:苹果菜单 → 注销\n"
+        log = l + log
+    }
+
+    func postLoginFinish() {
+        var l = "———— ④ 重登后:完成启用 ————\n"
+        let r = IMEInstaller.postLoginFinish()
+        l += r.log
         l += "———— 完成 ————\n"
         log = l + log
         refresh()
@@ -57,10 +70,15 @@ struct ContentView: View {
             }
             Text(model.status).font(.callout)
             HStack(spacing: 10) {
-                Button("安装并启用输入法") { model.install() }
+                Button("① 安装并启用输入法") { model.install() }
                     .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                Button("打开输入源设置") { model.openInputSourceSettings() }
+                Button("② 一键注销") { model.logout() }
+                    .buttonStyle(.bordered)
+                Button("③ 打开输入源设置") { model.openInputSourceSettings() }
+            }
+            HStack(spacing: 10) {
+                Button("④ 重登后:完成启用") { model.postLoginFinish() }
+                    .buttonStyle(.borderedProminent)
                 Spacer()
                 Button("卸载", role: .destructive) { model.uninstall() }
                     .buttonStyle(.bordered)
@@ -72,17 +90,17 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
             .frame(height: 130)
-            Text("首次安装需注销重登一次(TIS 登录扫描收录),之后即永久生效;按 Ctrl+Space 切换到 AFM拼音打字。")
+            Text("首次安装:①→②→重新登录→④,仅此一次;之后装卸永久生效。打字:Ctrl+Space 切换到 AFM拼音。")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 500)
     }
 }
 
 let app = NSApplication.shared
 let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
+    contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
     styleMask: [.titled, .closable],
     backing: .buffered, defer: false)
 window.title = "AFM拼音 安装器"

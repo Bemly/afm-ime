@@ -204,6 +204,44 @@ public enum IMEInstaller {
         return (st == noErr, "TISSelectInputSource = \(st)\(st == noErr ? "(成功)" : "(失败,用菜单栏或 Ctrl+Space 切换即可)")\n")
     }
 
+    /// 一键注销:优先 loginwindow 免确认 AppleEvent,失败走 System Events(弹系统确认框)
+    @discardableResult
+    public static func requestLogout() -> Bool {
+        if let s = NSAppleScript(source: "tell application \"loginwindow\" to «event aevtrlgo»") {
+            var err: NSDictionary?
+            s.executeAndReturnError(&err)
+            if err == nil { return true }
+        }
+        if let s = NSAppleScript(source: "tell application \"System Events\" to log out") {
+            var err: NSDictionary?
+            s.executeAndReturnError(&err)
+            return err == nil
+        }
+        return false
+    }
+
+    /// 启动已安装的输入法 app(imklaunchagent 感知启动有助于 TIS 收录)
+    @discardableResult
+    public static func launchIMEApp() -> Bool {
+        NSWorkspace.shared.open(installedIMEURL())
+    }
+
+    /// 重登后收尾:等待登录扫描收录 → 启用 → 选中 → 启动 app
+    public static func postLoginFinish() -> (ok: Bool, log: String) {
+        var log = ""
+        log += waitUpTo(10, interval: 0.5) { self.isRegistered() }
+            ? "✓ 登录扫描已收录 \(modeID)\n"
+            : "✗ 等待 10s 仍未收录 — 确认 bundle 在位后,点「安装并启用输入法」再注销一次\n"
+        let e = enable()
+        log += e.log
+        if e.ok {
+            log += select().log
+            launchIMEApp()
+            log += "✓ 输入法已就绪\n"
+        }
+        return (e.ok, log)
+    }
+
     /// 卸载:停用全部实例 → 删 bundle → defaults 清条目
     @discardableResult
     public static func uninstall() -> String {

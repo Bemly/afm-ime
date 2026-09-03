@@ -122,3 +122,15 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - 输入源显示名机制:TIS 在 bundle 的 `InfoPlist.strings`(或 xcstrings)里**用「输入源 ID」作 key** 查显示名(squirrel 的 InfoPlist.xcstrings 有 `im.rime.inputmethod.Squirrel.Hans` 等键);缺失时 mode 源的 localizedName 退化为裸 id
 - 启用列表(`AppleEnabledInputSources`)标准结构 = **base+mode 双条目**(SCIM 同款):`InputSourceKind="Keyboard Input Method"`(base,编辑器渲染标题)+ `InputSourceKind="Input Mode"`(mode,可切换源);只写 mode → 设置里只剩小字描述无标题
 - 输入菜单对已删除 bundle 有陈旧缓存,底层状态修正后 `killall TextInputMenuAgent` 可刷新(注册问题除外,那个要重登)
+
+## M2 收官结论(2026-09-04,打字链路实测可用)
+
+- **包名定稿:`moe.bemly.inputmethod.AfmIME`**(mode:`moe.bemly.inputmethod.AfmIME.Hans`)。规矩:id 必须含 `inputmethod` 段**且段后必须有名字**——以 `inputmethod` 结尾(如 moe.bemly.inputmethod)时添加选择器根本不显示它
+- **全新 id 首次安装流程**(缺一不可):
+  1. bundle 装入 `~/Library/Input Methods/` + defaults 写 base+mode 启用条目
+  2. 用安装包自身二进制递交 `TISRegisterInputSource`(记录持久化到 TIS 缓存)
+  3. **注销重登**(登录扫描复核记录 → 注册 → 按启用条目自动启用)
+  4. 重登后跑启用+选中(安装器「重登后:完成启用」按钮或 post-login-check.sh)
+- **递交注册后、重登前,绝对不要 kill 任何输入法组件**(TextInputMenuAgent/imklaunchagent/cfprefsd 都会冲掉待处理的注册记录——实测踩坑)
+- 首次收录后永久有效,之后装卸无需注销
+- 安装器 GUI(Sources/AFMInstaller):安装并启用 → 一键注销 → (重登)完成启用 → 打开输入源设置深链 `?InputSources` / 卸载
