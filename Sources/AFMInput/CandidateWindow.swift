@@ -12,37 +12,25 @@ struct CandidateItem: Identifiable, Equatable {
 }
 
 struct CandidateBarView: View {
-    var pinyin: String
     var items: [CandidateItem]
     var selectedIndex: Int      // 全局下标
     var hasMorePages: Bool
     var onSelect: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(pinyin)
-                .font(.system(size: 14, weight: .medium))
-                .underline()
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .frame(maxWidth: 140, alignment: .leading)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
-
-            HStack(spacing: 3) {
-                ForEach(items) { item in
-                    CandidateCell(item: item, selected: item.index == selectedIndex)
-                        .onTapGesture { onSelect(item.index) }
-                }
-                if hasMorePages {
-                    Text("▸")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 2)
-                }
+        HStack(spacing: 3) {
+            ForEach(items) { item in
+                CandidateCell(item: item, selected: item.index == selectedIndex)
+                    .onTapGesture { onSelect(item.index) }
+            }
+            if hasMorePages {
+                Text("▸")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 2)
             }
         }
+        .fixedSize(horizontal: true, vertical: false) // 防截断:按内容自然宽度撑开
         .padding(9)
     }
 }
@@ -60,6 +48,7 @@ private struct CandidateCell: View {
             Text(item.text)
                 .font(.system(size: 16, weight: selected ? .semibold : .regular))
                 .foregroundStyle(.primary)
+                .fixedSize()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -97,7 +86,7 @@ final class CandidateWindowController {
         p.becomesKeyOnlyIfNeeded = true
 
         let host = NSHostingView(rootView: CandidateBarView(
-            pinyin: "", items: [], selectedIndex: 0, hasMorePages: false,
+            items: [], selectedIndex: 0, hasMorePages: false,
             onSelect: { [weak self] idx in self?.onSelect(idx) }))
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
@@ -119,29 +108,32 @@ final class CandidateWindowController {
         return p
     }
 
-    /// 显示/刷新候选窗。caretRect: IMK 返回的屏幕坐标矩形(AppKit 底左原点)。
-    func show(pinyin: String, items: [CandidateItem], selectedIndex: Int,
+    /// 显示/刷新候选窗。caretRect: 屏幕坐标矩形(AppKit 底左原点);null 时回退底部居中。
+    func show(items: [CandidateItem], selectedIndex: Int,
               hasMorePages: Bool, caretRect: NSRect, onSelect: @escaping (Int) -> Void) {
         let panel = ensurePanel()
         self.onSelect = onSelect
         guard let host = hostingView else { return }
 
         host.rootView = CandidateBarView(
-            pinyin: pinyin, items: items, selectedIndex: selectedIndex,
+            items: items, selectedIndex: selectedIndex,
             hasMorePages: hasMorePages, onSelect: { [weak self] idx in self?.onSelect(idx) })
 
         let size = host.fittingSize
         panel.setContentSize(size)
 
-        // 位置:默认光标下方,贴底时放上方;水平夹进屏幕
-        let caretPoint = NSPoint(x: caretRect.midX, y: caretRect.midY)
-        let screen = NSScreen.screens.first { NSPointInRect(caretPoint, $0.frame) } ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let visible = NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
-        var origin = NSPoint(x: caretRect.minX, y: caretRect.minY - size.height - 8)
-        if origin.y < visible.minY { origin.y = caretRect.maxY + 8 }
-        origin.x = min(max(origin.x, visible.minX + 4), max(visible.minX + 4, visible.maxX - size.width - 4))
+        var origin: NSPoint
+        if caretRect.isNull {
+            // 客户端没给光标矩形:回退到屏幕底部居中
+            origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 60)
+        } else {
+            origin = NSPoint(x: caretRect.minX, y: caretRect.minY - size.height - 8)
+            if origin.y < visible.minY { origin.y = caretRect.maxY + 8 }
+            origin.x = min(max(origin.x, visible.minX + 4), max(visible.minX + 4, visible.maxX - size.width - 4))
+        }
         panel.setFrameOrigin(origin)
         panel.orderFront(nil)
         DebugLog.log("候选窗显示 size=\(NSStringFromSize(size)) origin=\(NSStringFromPoint(origin)) caret=\(NSStringFromRect(caretRect))")

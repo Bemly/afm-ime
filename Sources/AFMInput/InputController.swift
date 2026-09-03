@@ -216,7 +216,6 @@ final class InputController: IMKInputController {
         let caret = Self.caretRect(client)
         DebugLog.log("候选窗定位 caret=\(NSStringFromRect(caret)) 选中=\(selectedIndex) 页=\(page)")
         candidateWindow.show(
-            pinyin: raw,
             items: pageItems(),
             selectedIndex: selectedIndex,
             hasMorePages: (page + 1) * Self.perPage < candidates.count,
@@ -313,15 +312,17 @@ final class InputController: IMKInputController {
 
     // MARK: - 光标与上文
 
-    /// 光标屏幕坐标矩形(AppKit 底左原点),经 attributes(forCharacterIndex:) 拿行高矩形
+    /// 光标屏幕坐标矩形(AppKit 底左原点)。
+    /// 文档约定:index 相对 inline session,传 0 表示取当前选区信息;
+    /// 结果专用于"把候选窗放到屏幕上",返回即屏幕坐标。
     static func caretRect(_ client: Any!) -> NSRect {
-        guard let t = client as? IMKTextInput else { return NSRect(x: 0, y: 0, width: 1, height: 20) }
-        let sel = t.selectedRange()
-        let loc = sel.location == NSNotFound ? 0 : min(sel.location, 4096)
-        var rect = NSRect(x: 0, y: 0, width: 1, height: 20)
-        _ = t.attributes(forCharacterIndex: loc, lineHeightRectangle: &rect)
-        if rect.width <= 0 || rect.height <= 0 {
-            rect = NSRect(x: rect.minX, y: rect.minY, width: 1, height: max(rect.height, 20))
+        guard let t = client as? IMKTextInput else { return NSRect.null }
+        var rect = NSRect.null
+        let attrs = t.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
+        DebugLog.log("caretRect: attrs=\(attrs?.count ?? -1) 项 rect=\(NSStringFromRect(rect))")
+        if rect.isNull || rect.width <= 0 || rect.height <= 0 {
+            DebugLog.log("caretRect: 客户端未提供有效矩形,候选窗将回退到底部居中")
+            return NSRect.null
         }
         return rect
     }
