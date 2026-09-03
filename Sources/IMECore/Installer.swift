@@ -159,12 +159,18 @@ public enum IMEInstaller {
             existing = list
         }
         let others = existing.filter { !allOwnIDs.contains(($0["Bundle ID"] as? String) ?? "") }
+        // 与系统输入法(SCIM)一致:base(Keyboard Input Method)+ mode(Input Mode)各一条
+        // 编辑器靠 base 渲染标题,mode 才是可切换的输入源;缺 base 会只剩描述没有标题
         let modeEntry: [String: Any] = [
             "Bundle ID": bundleID,
             "Input Mode": modeID,
             "InputSourceKind": "Input Mode",
         ]
-        let next = others + [modeEntry]
+        let baseEntry: [String: Any] = [
+            "Bundle ID": bundleID,
+            "InputSourceKind": "Keyboard Input Method",
+        ]
+        let next = others + [modeEntry, baseEntry]
         CFPreferencesSetAppValue("AppleEnabledInputSources" as CFString, next as CFArray, toolboxDomain)
         CFPreferencesAppSynchronize(toolboxDomain)
         return enabledRefCount() == 1
