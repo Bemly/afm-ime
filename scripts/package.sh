@@ -17,8 +17,8 @@ cp Data/dict.bin "$APP/Contents/Resources/dict.bin"
 for lproj in zh-Hans en; do
   mkdir -p "$APP/Contents/Resources/$lproj.lproj"
   cat > "$APP/Contents/Resources/$lproj.lproj/InfoPlist.strings" <<'STRINGS'
-"moe.bemly.inputmethod" = "AFM拼音";
-"moe.bemly.inputmethod.hans" = "AFM拼音";
+"moe.bemly.inputmethod.AfmIME" = "AFM拼音";
+"moe.bemly.inputmethod.AfmIME.afmpinyin.hans" = "AFM拼音";
 "CFBundleDisplayName" = "AFM拼音";
 "CFBundleName" = "AFM拼音";
 STRINGS
@@ -31,7 +31,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
 	<key>CFBundleExecutable</key><string>AFMInput</string>
-	<key>CFBundleIdentifier</key><string>moe.bemly.inputmethod</string>
+	<key>CFBundleIdentifier</key><string>moe.bemly.inputmethod.AfmIME</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>AFM拼音</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音</string>
@@ -41,7 +41,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSBackgroundOnly</key><false/>
 	<key>LSUIElement</key><true/>
-	<key>InputMethodConnectionName</key><string>moe.bemly.inputmethod_Connection</string>
+	<key>InputMethodConnectionName</key><string>moe.bemly.inputmethod.AfmIME.afmpinyin_Connection</string>
 	<key>InputMethodServerControllerClass</key><string>afm_input.InputController</string>
 	<key>TISIntendedLanguage</key><string>zh-Hans</string>
 	<key>TICapsLockLanguageSwitchCapable</key><true/>
@@ -52,9 +52,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<dict>
 		<key>tsInputModeListKey</key>
 		<dict>
-			<key>moe.bemly.inputmethod.hans</key>
+			<key>moe.bemly.inputmethod.AfmIME.afmpinyin.hans</key>
 			<dict>
-				<key>TISInputSourceID</key><string>moe.bemly.inputmethod.hans</string>
+				<key>TISInputSourceID</key><string>moe.bemly.inputmethod.AfmIME.afmpinyin.hans</string>
 				<key>TISIntendedLanguage</key><string>zh-Hans</string>
 				<key>tsInputModeMenuIconFileKey</key><string>icon.tiff</string>
 				<key>tsInputModeAlternateMenuIconFileKey</key><string>icon.tiff</string>
@@ -69,7 +69,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 			</dict>
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
-		<array><string>moe.bemly.inputmethod.hans</string></array>
+		<array><string>moe.bemly.inputmethod.AfmIME.afmpinyin.hans</string></array>
 	</dict>
 </dict>
 </plist>

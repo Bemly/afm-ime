@@ -9,13 +9,15 @@ import Foundation
 /// - TISSelectInputSource:干净状态下可用;脏状态返回 -50
 /// - 卸载必须先 TISDisableInputSource 停用全部实例,否则 TIS 回写会把启用条目带回来
 public enum IMEInstaller {
-    public static let bundleID = "moe.bemly.inputmethod"
-    public static let modeID = "moe.bemly.inputmethod.hans"
+    public static let bundleID = "moe.bemly.inputmethod.AfmIME"
+    public static let modeID = "moe.bemly.inputmethod.AfmIME.Hans"
     /// 历史遗留 id(清理用)
     public static let legacyBundleIDs: Set<String> = [
         "com.afm.inputmethod.afmpinyin", "com.afm.inputmethod.afmpinyin.hans",
         "com.afm.AFMInput", "com.afm.AFMInput.hans",
         "moe.bemly.inputmethod.ime", "moe.bemly.inputmethod.ime.hans",
+        "moe.bemly.inputmethod", "moe.bemly.inputmethod.hans",
+        "moe.bemly.inputmethod.afmpinyin", "moe.bemly.inputmethod.afmpinyin.hans",
     ]
     public static let imeAppName = "AFM拼音.app"
     public static let toolboxDomain = "com.apple.HIToolbox" as CFString
