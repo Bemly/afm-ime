@@ -8,6 +8,7 @@ import IMECore
 final class FMReranker {
     static let shared = FMReranker()
     private static let instructions = "你是中文输入法的候选排序引擎。根据上文语境和拼音,从候选列表中选出最符合语境的一个。只输出该候选的序号数字,禁止输出任何其他内容。"
+    private static let sentenceInstructions = "你是中文拼音输入法的整句预测引擎。把用户输入的拼音串转成最通顺的中文。只输出中文结果,禁止解释、禁止重复拼音。"
 
     private var available: Bool {
         if #available(macOS 26.0, *) {
@@ -47,6 +48,44 @@ final class FMReranker {
             DebugLog.error("FM rerank 失败: \(error) (耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms)")
             return nil
         }
+    }
+
+    /// FM 整句预测:长拼音词典覆盖不住时,直接让模型出句子
+    func predictSentence(context: String, pinyin: String) async -> String? {
+        guard available, pinyin.count >= 4 else {
+            DebugLog.log("FM 整句跳过: available=\(available) 长度=\(pinyin.count)")
+            return nil
+        }
+        let prompt = """
+        \(context.isEmpty ? "" : "上文:\(context)\n")拼音:\(pinyin)
+        把拼音转成中文,只输出中文本身,不要解释。
+        """
+        DebugLog.log("FM 整句请求: 拼音='\(pinyin)' 上文='\(context)'")
+        guard #available(macOS 26.0, *) else { return nil }
+        let t0 = Date()
+        do {
+            let session = LanguageModelSession(
+                model: SystemLanguageModel.default,
+                instructions: Self.sentenceInstructions)
+            let resp = try await session.respond(to: prompt)
+            let ms = String(format: "%.0f", -t0.timeIntervalSinceNow * 1000)
+            let out = resp.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            DebugLog.log("FM 整句响应(\(ms)ms): '\(out)'")
+            guard Self.looksLikeChinese(out) else {
+                DebugLog.log("FM 整句拒绝: 不像中文输出")
+                return nil
+            }
+            return out
+        } catch {
+            DebugLog.error("FM 整句失败: \(error) (耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms)")
+            return nil
+        }
+    }
+
+    static func looksLikeChinese(_ s: String) -> Bool {
+        guard !s.isEmpty, s.count <= 60 else { return false }
+        let cjk = s.unicodeScalars.filter { (0x4E00...0x9FFF).contains($0.value) }.count
+        return Double(cjk) >= Double(s.unicodeScalars.count) * 0.5
     }
 
     static func firstIndex(in text: String, upperBound: Int) -> Int? {

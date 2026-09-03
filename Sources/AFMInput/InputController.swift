@@ -79,8 +79,8 @@ final class InputController: IMKInputController {
             refresh(client)
             return true
 
-        case scalar.value == 49 where composing: // 空格 → 上屏选中候选
-            DebugLog.log("空格 → 上屏选中 idx=\(selectedIndex)")
+        case event.keyCode == 49 where composing: // 空格键(keyCode 49)→ 上屏选中候选,不插入空格
+            DebugLog.log("空格键 → 上屏选中 idx=\(selectedIndex)")
             commitCandidate(at: selectedIndex, client: client)
             return true
 
@@ -268,11 +268,16 @@ final class InputController: IMKInputController {
         let snapshotRaw = raw
         let context = Self.contextBeforeCaret(client)
         let texts = candidates.prefix(Self.perPage).map(\.text)
-        guard texts.count > 1 else {
+
+        // 整句判定: 无候选,或输入较长而最佳候选的拼音覆盖不足一半(词典切不出整句)
+        let topCover = candidates.first?.pinyin.count ?? 0
+        let needSentence = texts.isEmpty
+            || (snapshotRaw.count >= 8 && topCover < snapshotRaw.count / 2)
+        if texts.count <= 1 && !needSentence {
             DebugLog.log("FM 跳过: 候选不足")
             return
         }
-        DebugLog.log("FM 排队 gen=\(gen) 上文='\(context)' 拼音='\(snapshotRaw)' 候选=\(texts)")
+        DebugLog.log("FM 排队 gen=\(gen) 模式=\(needSentence ? "整句" : "重排") 上文='\(context)' 拼音='\(snapshotRaw)' 候选=\(texts)")
 
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
@@ -282,19 +287,33 @@ final class InputController: IMKInputController {
                 DebugLog.log("FM 结果丢弃 gen=\(gen)(组词已变化)")
                 return
             }
-            let t0 = Date()
-            guard let best = await FMReranker.shared.rerank(context: context, pinyin: snapshotRaw, candidates: texts) else {
-                DebugLog.log("FM 无结果 gen=\(gen) 耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms")
-                return
-            }
-            await MainActor.run {
-                guard self.raw == snapshotRaw, self.fmGeneration == gen,
-                      best < texts.count else {
-                    DebugLog.log("FM 结果过期丢弃 gen=\(gen)")
+            if needSentence {
+                guard let sentence = await FMReranker.shared.predictSentence(context: context, pinyin: snapshotRaw) else {
+                    DebugLog.log("FM 整句无结果 gen=\(gen)")
                     return
                 }
-                DebugLog.log("FM 生效 gen=\(gen): '\(texts[best])' 置顶 (耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms)")
-                self.applyAIRerank(text: texts[best])
+                await MainActor.run {
+                    guard self.raw == snapshotRaw, self.fmGeneration == gen else {
+                        DebugLog.log("FM 整句过期丢弃 gen=\(gen)")
+                        return
+                    }
+                    DebugLog.log("FM 整句生效 gen=\(gen): '\(sentence)' 置顶 ✦")
+                    self.applyAISentence(sentence)
+                }
+            } else {
+                guard let best = await FMReranker.shared.rerank(context: context, pinyin: snapshotRaw, candidates: texts) else {
+                    DebugLog.log("FM 无结果 gen=\(gen)")
+                    return
+                }
+                await MainActor.run {
+                    guard self.raw == snapshotRaw, self.fmGeneration == gen,
+                          best < texts.count else {
+                        DebugLog.log("FM 结果过期丢弃 gen=\(gen)")
+                        return
+                    }
+                    DebugLog.log("FM 生效 gen=\(gen): '\(texts[best])' 置顶 ✦")
+                    self.applyAIRerank(text: texts[best])
+                }
             }
         }
     }
@@ -305,6 +324,17 @@ final class InputController: IMKInputController {
         let picked = candidates.remove(at: idx)
         candidates.insert(picked, at: 0)
         aiBoostText = picked.text
+        selectedIndex = 0
+        page = 0
+        updateCandidateWindow(client())
+    }
+
+    /// 把 FM 整句预测结果作为首个候选(✦),空格/1 直接上屏
+    private func applyAISentence(_ sentence: String) {
+        guard !candidates.contains(where: { $0.text == sentence }) else { return }
+        let cand = CandidateEngine.Candidate(text: sentence, pinyin: "(AI 整句)", score: .greatestFiniteMagnitude)
+        candidates.insert(cand, at: 0)
+        aiBoostText = sentence
         selectedIndex = 0
         page = 0
         updateCandidateWindow(client())

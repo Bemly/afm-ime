@@ -15,6 +15,12 @@ public final class CandidateEngine {
         public var text: String
         public var pinyin: String
         public var score: Double
+
+        public init(text: String, pinyin: String, score: Double) {
+            self.text = text
+            self.pinyin = pinyin
+            self.score = score
+        }
     }
 
     public func candidates(for rawInput: String, limit: Int = 20) -> [Candidate] {
