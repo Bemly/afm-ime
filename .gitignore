@@ -1,0 +1,7 @@
+.build/
+build/
+vendor/
+Data/dict.bin
+proto/bench_fm
+*.o
+.DS_Store
