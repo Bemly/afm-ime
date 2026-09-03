@@ -41,8 +41,8 @@ private struct CandidateCell: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(item.isAI ? "✦" : "\(item.index + 1)")
-                .font(.system(size: 10, weight: .semibold))
+            Text(item.isAI ? "\u{F8FF}" : "\(item.index + 1)")
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(item.isAI ? AnyShapeStyle(.cyan) : AnyShapeStyle(.secondary))
                 .baselineOffset(-1)
             Text(item.text)

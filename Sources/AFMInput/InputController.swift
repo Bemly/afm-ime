@@ -84,12 +84,12 @@ final class InputController: IMKInputController {
             commitCandidate(at: selectedIndex, client: client)
             return true
 
-        case scalar.value == 36 where composing: // 回车 → 上屏拼音原文
+        case event.keyCode == 36 where composing: // 回车键(keyCode 36)→ 上屏拼音原文
             DebugLog.log("回车 → 上屏原文 '\(raw)'")
             commit(raw, client: client)
             return true
 
-        case (49...57).contains(scalar.value) where !candidates.isEmpty: // 数字 1-9 选当前页
+        case (49...57).contains(scalar.value) where !candidates.isEmpty: // 字符 '1'-'9' 选当前页
             let idx = page * Self.perPage + Int(scalar.value) - 49
             if idx < candidates.count {
                 DebugLog.log("数字 \(Int(scalar.value) - 48) → 上屏 idx=\(idx)")
@@ -99,25 +99,25 @@ final class InputController: IMKInputController {
             DebugLog.log("数字越界 idx=\(idx),放行")
             return false
 
-        case scalar.value == 51 where composing: // 退格
+        case event.keyCode == 51 where composing: // 退格键(keyCode 51)→ 删最后一个字母,组词延续
             raw.removeLast()
             aiBoostText = nil
             DebugLog.log("退格 → raw='\(raw)'")
             refresh(client)
             return true
 
-        case scalar.value == 53 where composing: // Esc 取消组词
+        case event.keyCode == 53 where composing: // Esc 键(keyCode 53)→ 取消组词
             DebugLog.log("Esc → 取消组词")
             clearComposition(client)
             return true
 
-        case scalar.value == 125 where composing: // ↓ 高亮下一个
+        case event.keyCode == 125 where composing: // ↓ 键(keyCode 125)高亮下一个
             moveSelection(+1)
             DebugLog.log("↓ 选中=\(selectedIndex) 页=\(page)")
             updateCandidateWindow(client)
             return true
 
-        case scalar.value == 126 where composing: // ↑ 高亮上一个
+        case event.keyCode == 126 where composing: // ↑ 键(keyCode 126)高亮上一个
             moveSelection(-1)
             DebugLog.log("↑ 选中=\(selectedIndex) 页=\(page)")
             updateCandidateWindow(client)
