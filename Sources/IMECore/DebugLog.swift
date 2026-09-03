@@ -6,7 +6,7 @@ import Foundation
 public enum DebugLog {
     public static var isDebug: Bool {
         ProcessInfo.processInfo.environment["AFM_DEBUG"] == "1"
-            || FileManager.default.fileExists("/tmp/afm-ime-debug")
+            || FileManager.default.fileExists(atPath: "/tmp/afm-ime-debug")
     }
     public static var logPath: String {
         ProcessInfo.processInfo.environment["AFM_LOG"] ?? "/tmp/afm-ime.log"
