@@ -41,7 +41,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSBackgroundOnly</key><false/>
 	<key>LSUIElement</key><true/>
-	<key>InputMethodConnectionName</key><string>moe.bemly.inputmethod.AfmIME.afmpinyin_Connection</string>
+	<key>InputMethodConnectionName</key><string>moe.bemly.inputmethod.AfmIME_Connection</string>
 	<key>InputMethodServerControllerClass</key><string>afm_input.InputController</string>
 	<key>TISIntendedLanguage</key><string>zh-Hans</string>
 	<key>TICapsLockLanguageSwitchCapable</key><true/>
