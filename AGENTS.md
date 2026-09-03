@@ -116,3 +116,9 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - `TISEnableInputSource` 对 ad-hoc 包返回 noErr 但不写 `AppleEnabledInputSources`(静默无效);**可靠做法是 defaults 直写启用列表**(export→python 过滤→import,VietTelex 修复法),写完 TIS 已启用视图立即可见,无需注销
 - 干净状态下 `TISSelectInputSource` 成功(此前 -50 是脏状态所致);选中状态写在 `AppleSelectedInputSources`
 - scripts/uninstall.sh:进程+bundle+defaults 全清;TIS 注册表条目注销重登后由登录扫描清除
+
+## 显示名与启用结构(M2.5 补充)
+
+- 输入源显示名机制:TIS 在 bundle 的 `InfoPlist.strings`(或 xcstrings)里**用「输入源 ID」作 key** 查显示名(squirrel 的 InfoPlist.xcstrings 有 `im.rime.inputmethod.Squirrel.Hans` 等键);缺失时 mode 源的 localizedName 退化为裸 id
+- 启用列表(`AppleEnabledInputSources`)标准结构 = **base+mode 双条目**(SCIM 同款):`InputSourceKind="Keyboard Input Method"`(base,编辑器渲染标题)+ `InputSourceKind="Input Mode"`(mode,可切换源);只写 mode → 设置里只剩小字描述无标题
+- 输入菜单对已删除 bundle 有陈旧缓存,底层状态修正后 `killall TextInputMenuAgent` 可刷新(注册问题除外,那个要重登)
