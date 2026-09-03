@@ -48,7 +48,7 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
-                if let url = Bundle.main.url(forResource: "icon", withExtension: "tiff"),
+                if let url = Bundle.main.url(forResource: "appicon", withExtension: "tiff"),
                    let img = NSImage(contentsOf: url) {
                     Image(nsImage: img).resizable().frame(width: 40, height: 40)
                 }

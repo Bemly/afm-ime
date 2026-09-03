@@ -11,6 +11,18 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/afm-input "$APP/Contents/MacOS/AFMInput"
 cp Data/dict.bin "$APP/Contents/Resources/dict.bin"
 [ -f Data/icon.tiff ] && cp Data/icon.tiff "$APP/Contents/Resources/icon.tiff"
+[ -f Data/appicon.tiff ] && cp Data/appicon.tiff "$APP/Contents/Resources/appicon.tiff"
+
+# 输入源显示名:TIS 用「输入源 ID」在 InfoPlist.strings 里查显示名(参考 squirrel InfoPlist.xcstrings)
+for lproj in zh-Hans en; do
+  mkdir -p "$APP/Contents/Resources/$lproj.lproj"
+  cat > "$APP/Contents/Resources/$lproj.lproj/InfoPlist.strings" <<'STRINGS'
+"moe.bemly.inputmethod.ime" = "AFM拼音";
+"moe.bemly.inputmethod.ime.hans" = "AFM拼音";
+"CFBundleDisplayName" = "AFM拼音";
+"CFBundleName" = "AFM拼音";
+STRINGS
+done
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -19,17 +31,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
 	<key>CFBundleExecutable</key><string>AFMInput</string>
-	<key>CFBundleIdentifier</key><string>com.afm.inputmethod.afmpinyin</string>
+	<key>CFBundleIdentifier</key><string>moe.bemly.inputmethod.ime</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>AFM拼音</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.04</string>
+	<key>CFBundleVersion</key><string>20260904</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSBackgroundOnly</key><false/>
 	<key>LSUIElement</key><true/>
-	<key>InputMethodConnectionName</key><string>com.afm.inputmethod.afmpinyin_Connection</string>
+	<key>InputMethodConnectionName</key><string>moe.bemly.inputmethod.ime_Connection</string>
 	<key>InputMethodServerControllerClass</key><string>afm_input.InputController</string>
 	<key>TISIntendedLanguage</key><string>zh-Hans</string>
 	<key>TICapsLockLanguageSwitchCapable</key><true/>
@@ -40,9 +52,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<dict>
 		<key>tsInputModeListKey</key>
 		<dict>
-			<key>com.afm.inputmethod.afmpinyin.hans</key>
+			<key>moe.bemly.inputmethod.ime.hans</key>
 			<dict>
-				<key>TISInputSourceID</key><string>com.afm.inputmethod.afmpinyin.hans</string>
+				<key>TISInputSourceID</key><string>moe.bemly.inputmethod.ime.hans</string>
 				<key>TISIntendedLanguage</key><string>zh-Hans</string>
 				<key>tsInputModeMenuIconFileKey</key><string>icon.tiff</string>
 				<key>tsInputModeAlternateMenuIconFileKey</key><string>icon.tiff</string>
@@ -57,7 +69,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 			</dict>
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
-		<array><string>com.afm.inputmethod.afmpinyin.hans</string></array>
+		<array><string>moe.bemly.inputmethod.ime.hans</string></array>
 	</dict>
 </dict>
 </plist>
@@ -72,7 +84,7 @@ rm -rf "$INSTALLER"
 mkdir -p "$INSTALLER/Contents/MacOS" "$INSTALLER/Contents/Resources"
 cp .build/release/afm-installer "$INSTALLER/Contents/MacOS/AFMInstaller"
 cp -R "$APP" "$INSTALLER/Contents/Resources/"
-cp Data/icon.tiff "$INSTALLER/Contents/Resources/icon.tiff"
+cp Data/appicon.tiff "$INSTALLER/Contents/Resources/appicon.tiff"
 cat > "$INSTALLER/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -84,8 +96,8 @@ cat > "$INSTALLER/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>AFM拼音安装器</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音安装器</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.04</string>
+	<key>CFBundleVersion</key><string>20260904</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict>

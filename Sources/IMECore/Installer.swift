@@ -9,8 +9,13 @@ import Foundation
 /// - TISSelectInputSource:干净状态下可用;脏状态返回 -50
 /// - 卸载必须先 TISDisableInputSource 停用全部实例,否则 TIS 回写会把启用条目带回来
 public enum IMEInstaller {
-    public static let bundleID = "com.afm.inputmethod.afmpinyin"
-    public static let modeID = "com.afm.inputmethod.afmpinyin.hans"
+    public static let bundleID = "moe.bemly.inputmethod.ime"
+    public static let modeID = "moe.bemly.inputmethod.ime.hans"
+    /// 历史遗留 id(清理用)
+    public static let legacyBundleIDs: Set<String> = [
+        "com.afm.inputmethod.afmpinyin", "com.afm.inputmethod.afmpinyin.hans",
+        "com.afm.AFMInput", "com.afm.AFMInput.hans",
+    ]
     public static let imeAppName = "AFM拼音.app"
     public static let toolboxDomain = "com.apple.HIToolbox" as CFString
 
@@ -36,11 +41,11 @@ public enum IMEInstaller {
         allSources().first { strProp($0, kTISPropertyInputSourceID) == id }
     }
 
-    /// 本输入法的全部源实例(可能有重复注册产生的多份)
+    /// 本输入法的全部源实例(含历史遗留 id;可能有重复注册产生的多份)
     public static func afmRefs() -> [TISInputSource] {
         allSources().filter {
             let id = strProp($0, kTISPropertyInputSourceID)
-            return id == modeID || id == bundleID
+            return id == modeID || id == bundleID || legacyBundleIDs.contains(id)
         }
     }
 
@@ -144,15 +149,16 @@ public enum IMEInstaller {
         return (ok, log)
     }
 
-    /// defaults 直写 com.apple.HIToolbox 启用列表:清掉自家全部条目后只写一条 mode
+    /// defaults 直写 com.apple.HIToolbox 启用列表:清掉自家(含遗留 id)全部条目后只写一条 mode
     @discardableResult
     public static func writeEnabledEntries() -> Bool {
+        let allOwnIDs = legacyBundleIDs.union([bundleID])
         var existing: [[String: Any]] = []
         if let raw = CFPreferencesCopyAppValue("AppleEnabledInputSources" as CFString, toolboxDomain),
            let list = (raw as? NSArray) as? [[String: Any]] {
             existing = list
         }
-        let others = existing.filter { ($0["Bundle ID"] as? String) != bundleID }
+        let others = existing.filter { !allOwnIDs.contains(($0["Bundle ID"] as? String) ?? "") }
         let modeEntry: [String: Any] = [
             "Bundle ID": bundleID,
             "Input Mode": modeID,
@@ -191,10 +197,15 @@ public enum IMEInstaller {
     }
 
     static func cleanDefaults() {
+        let allIDs = legacyBundleIDs.union([bundleID])
         for key in ["AppleEnabledInputSources", "AppleSelectedInputSources", "AppleInputSourceHistory"] as [CFString] {
             guard let raw = CFPreferencesCopyAppValue(key, toolboxDomain),
                   let list = (raw as? NSArray) as? [[String: Any]] else { continue }
-            let filtered = list.filter { ($0["Bundle ID"] as? String) != bundleID }
+            let filtered = list.filter { entry in
+                let bid = entry["Bundle ID"] as? String
+                let mode = entry["Input Mode"] as? String
+                return !(allIDs.contains(bid ?? "") || allIDs.contains(mode ?? ""))
+            }
             if filtered.count != list.count {
                 CFPreferencesSetAppValue(key, filtered as CFArray, toolboxDomain)
             }

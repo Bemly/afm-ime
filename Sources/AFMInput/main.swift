@@ -1,5 +1,6 @@
 import AppKit
 import InputMethodKit
+import IMECore
 
 // CLI 安装器模式(参考 squirrel --register-input-source 等)
 let cliArgs = CommandLine.arguments
@@ -10,6 +11,7 @@ if cliArgs.count > 1 {
     case "--enable-input-source": code = Installer.enable()
     case "--select-input-source": code = Installer.select()
     case "--setup": code = Installer.setup() // 单进程连续 register+enable+select,避开 cfprefsd 冲掉瞬态注册
+    case "--uninstall": code = { print(IMEInstaller.uninstall()); return 0 }()
     case "--quit": code = Installer.quitRunning()
     default:
         print("用法: AFMInput [--register-input-source|--enable-input-source|--select-input-source|--quit]")
