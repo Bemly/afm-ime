@@ -15,10 +15,22 @@ struct CandidateBarView: View {
     var items: [CandidateItem]
     var selectedIndex: Int      // 全局下标
     var hasMorePages: Bool
+    var isLoading: Bool         // 无词典候选时占位,等 FM 整句
     var onSelect: (Int) -> Void
 
     var body: some View {
         HStack(spacing: 3) {
+            if isLoading && items.isEmpty {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(" 整句预测中")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+            }
             ForEach(items) { item in
                 CandidateCell(item: item, selected: item.index == selectedIndex)
                     .onTapGesture { onSelect(item.index) }
@@ -86,7 +98,7 @@ final class CandidateWindowController {
         p.becomesKeyOnlyIfNeeded = true
 
         let host = NSHostingView(rootView: CandidateBarView(
-            items: [], selectedIndex: 0, hasMorePages: false,
+            items: [], selectedIndex: 0, hasMorePages: false, isLoading: false,
             onSelect: { [weak self] idx in self?.onSelect(idx) }))
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
@@ -109,15 +121,18 @@ final class CandidateWindowController {
     }
 
     /// 显示/刷新候选窗。caretRect: 屏幕坐标矩形(AppKit 底左原点);null 时回退底部居中。
+    /// isLoading 且 items 为空时显示 FM 占位(光标处预留空间,整句到达后原位替换)。
     func show(items: [CandidateItem], selectedIndex: Int,
-              hasMorePages: Bool, caretRect: NSRect, onSelect: @escaping (Int) -> Void) {
+              hasMorePages: Bool, isLoading: Bool = false,
+              caretRect: NSRect, onSelect: @escaping (Int) -> Void) {
         let panel = ensurePanel()
         self.onSelect = onSelect
         guard let host = hostingView else { return }
 
         host.rootView = CandidateBarView(
             items: items, selectedIndex: selectedIndex,
-            hasMorePages: hasMorePages, onSelect: { [weak self] idx in self?.onSelect(idx) })
+            hasMorePages: hasMorePages, isLoading: isLoading,
+            onSelect: { [weak self] idx in self?.onSelect(idx) })
 
         let size = host.fittingSize
         panel.setContentSize(size)

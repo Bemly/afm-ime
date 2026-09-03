@@ -194,9 +194,15 @@ final class InputController: IMKInputController {
                                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
 
         if candidates.isEmpty {
-            DebugLog.log("无候选 → 隐藏候选窗")
-            candidateWindow.hide()
-            fmGeneration &+= 1
+            if raw.count >= 4 {
+                // 无词典候选但 FM 可能出整句:光标处占位等待,不取消推理
+                DebugLog.log("无词典候选(长 \(raw.count))→ 占位等待 FM 整句")
+                updateCandidateWindow(client, loading: true)
+                scheduleFMRerank(client)
+            } else {
+                DebugLog.log("无候选且过短 → 隐藏候选窗")
+                candidateWindow.hide()
+            }
         } else {
             updateCandidateWindow(client)
             scheduleFMRerank(client)
@@ -211,8 +217,16 @@ final class InputController: IMKInputController {
         }
     }
 
-    private func updateCandidateWindow(_ client: Any!) {
-        guard !candidates.isEmpty else { candidateWindow.hide(); return }
+    private func updateCandidateWindow(_ client: Any!, loading: Bool = false) {
+        if candidates.isEmpty {
+            guard loading else { candidateWindow.hide(); return }
+            let caret = Self.caretRect(client)
+            DebugLog.log("候选窗占位(FM 整句中) caret=\(NSStringFromRect(caret))")
+            candidateWindow.show(
+                items: [], selectedIndex: 0, hasMorePages: false, isLoading: true,
+                caretRect: caret, onSelect: { _ in })
+            return
+        }
         let caret = Self.caretRect(client)
         DebugLog.log("候选窗定位 caret=\(NSStringFromRect(caret)) 选中=\(selectedIndex) 页=\(page)")
         candidateWindow.show(
@@ -230,7 +244,13 @@ final class InputController: IMKInputController {
 
     private func commitCandidate(at index: Int, client: Any!) {
         guard index < candidates.count else {
-            DebugLog.error("commitCandidate 越界 idx=\(index) 总数=\(candidates.count)")
+            // 无候选时空格/数字:按惯例上屏已输入的拼音原文
+            if candidates.isEmpty, !raw.isEmpty {
+                DebugLog.log("无候选 → 空格/数字上屏原文 '\(raw)'")
+                commit(raw, client: client)
+            } else {
+                DebugLog.error("commitCandidate 越界 idx=\(index) 总数=\(candidates.count)")
+            }
             return
         }
         commit(candidates[index].text, client: client)
@@ -290,6 +310,13 @@ final class InputController: IMKInputController {
             if needSentence {
                 guard let sentence = await FMReranker.shared.predictSentence(context: context, pinyin: snapshotRaw) else {
                     DebugLog.log("FM 整句无结果 gen=\(gen)")
+                    await MainActor.run {
+                        // 占位中的窗口:整句失败且仍无词典候选 → 收起占位
+                        if self.raw == snapshotRaw, self.fmGeneration == gen, self.candidates.isEmpty {
+                            DebugLog.log("FM 整句失败 → 收起占位")
+                            self.candidateWindow.hide()
+                        }
+                    }
                     return
                 }
                 await MainActor.run {
