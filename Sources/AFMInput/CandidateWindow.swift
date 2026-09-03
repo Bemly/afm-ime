@@ -1,0 +1,145 @@
+import AppKit
+import SwiftUI
+
+// MARK: - 候选条 SwiftUI 视图(参考 macOS 26 候选窗样式)
+
+struct CandidateItem: Identifiable, Equatable {
+    var id: Int { index }
+    let index: Int      // 全局下标(跨页连续)
+    let text: String
+    let isAI: Bool      // FM 重排提到首位时显示 ✦
+}
+
+struct CandidateBarView: View {
+    var pinyin: String
+    var items: [CandidateItem]
+    var selectedIndex: Int      // 全局下标
+    var hasMorePages: Bool
+    var onSelect: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(pinyin)
+                .font(.system(size: 14, weight: .medium))
+                .underline()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(maxWidth: 140, alignment: .leading)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+
+            HStack(spacing: 3) {
+                ForEach(items) { item in
+                    CandidateCell(item: item, selected: item.index == selectedIndex)
+                        .onTapGesture { onSelect(item.index) }
+                }
+                if hasMorePages {
+                    Text("▸")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 2)
+                }
+            }
+        }
+        .padding(9)
+    }
+}
+
+private struct CandidateCell: View {
+    let item: CandidateItem
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(item.isAI ? "✦" : "\(item.index + 1)")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(item.isAI ? AnyShapeStyle(.cyan) : AnyShapeStyle(.secondary))
+                .baselineOffset(-1)
+            Text(item.text)
+                .font(.system(size: 16, weight: selected ? .semibold : .regular))
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background {
+            RoundedRectangle(cornerRadius: 9)
+                .fill(selected ? AnyShapeStyle(.white.opacity(0.22)) : AnyShapeStyle(.clear))
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - 液态玻璃候选窗(NSPanel + NSGlassEffectView)
+
+/// 非激活 NSPanel,不抢焦点;NSGlassEffectView 提供真·液态玻璃(暗色/亮色自适应);
+/// 内容为 SwiftUI 候选条;跟随光标定位。玻璃效果需要 macOS 26+,低版本退化为普通视图。
+final class CandidateWindowController {
+    private var panel: NSPanel?
+    private var hostingView: NSHostingView<CandidateBarView>?
+    private var onSelect: (Int) -> Void = { _ in }
+
+    var isVisible: Bool { panel?.isVisible ?? false }
+
+    private func ensurePanel() -> NSPanel {
+        if let panel { return panel }
+        let p = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false)
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.level = .popUpMenu
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        p.hidesOnDeactivate = false
+        p.becomesKeyOnlyIfNeeded = true
+
+        let host = NSHostingView(rootView: CandidateBarView(
+            pinyin: "", items: [], selectedIndex: 0, hasMorePages: false,
+            onSelect: { [weak self] idx in self?.onSelect(idx) }))
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = 22
+            glass.contentView = host
+            if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
+            p.contentView = glass
+        } else {
+            p.contentView = host
+        }
+        hostingView = host
+        panel = p
+        return p
+    }
+
+    /// 显示/刷新候选窗。caretRect: IMK 返回的屏幕坐标矩形(AppKit 底左原点)。
+    func show(pinyin: String, items: [CandidateItem], selectedIndex: Int,
+              hasMorePages: Bool, caretRect: NSRect, onSelect: @escaping (Int) -> Void) {
+        let panel = ensurePanel()
+        self.onSelect = onSelect
+        guard let host = hostingView else { return }
+
+        host.rootView = CandidateBarView(
+            pinyin: pinyin, items: items, selectedIndex: selectedIndex,
+            hasMorePages: hasMorePages, onSelect: { [weak self] idx in self?.onSelect(idx) })
+
+        let size = host.fittingSize
+        panel.setContentSize(size)
+
+        // 位置:默认光标下方,贴底时放上方;水平夹进屏幕
+        let caretPoint = NSPoint(x: caretRect.midX, y: caretRect.midY)
+        let screen = NSScreen.screens.first { NSPointInRect(caretPoint, $0.frame) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        var origin = NSPoint(x: caretRect.minX, y: caretRect.minY - size.height - 8)
+        if origin.y < visible.minY { origin.y = caretRect.maxY + 8 }
+        origin.x = min(max(origin.x, visible.minX + 4), max(visible.minX + 4, visible.maxX - size.width - 4))
+        panel.setFrameOrigin(origin)
+        panel.orderFront(nil)
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+    }
+}
