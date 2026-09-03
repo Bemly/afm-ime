@@ -9,12 +9,13 @@ import Foundation
 /// - TISSelectInputSource:干净状态下可用;脏状态返回 -50
 /// - 卸载必须先 TISDisableInputSource 停用全部实例,否则 TIS 回写会把启用条目带回来
 public enum IMEInstaller {
-    public static let bundleID = "moe.bemly.inputmethod.ime"
-    public static let modeID = "moe.bemly.inputmethod.ime.hans"
+    public static let bundleID = "moe.bemly.inputmethod"
+    public static let modeID = "moe.bemly.inputmethod.hans"
     /// 历史遗留 id(清理用)
     public static let legacyBundleIDs: Set<String> = [
         "com.afm.inputmethod.afmpinyin", "com.afm.inputmethod.afmpinyin.hans",
         "com.afm.AFMInput", "com.afm.AFMInput.hans",
+        "moe.bemly.inputmethod.ime", "moe.bemly.inputmethod.ime.hans",
     ]
     public static let imeAppName = "AFM拼音.app"
     public static let toolboxDomain = "com.apple.HIToolbox" as CFString
@@ -77,9 +78,10 @@ public enum IMEInstaller {
         let installed = isBundleInstalled()
         let registered = isRegistered()
         let refs = enabledRefCount()
-        if installed && refs == 1 { return "✓ 已安装并启用 — 按 Ctrl+Space 切换后即可打字" }
-        if installed && refs > 1 { return "⚠︎ 已启用但存在 \(refs) 个重复实例 — 点「安装并启用输入法」收敛" }
-        if installed { return "已安装未启用 — 点「安装并启用输入法」" }
+        if installed && registered && refs == 1 { return "✓ 已安装并启用 — 按 Ctrl+Space 切换后即可打字" }
+        if installed && registered && refs > 1 { return "⚠︎ 已启用但存在 \(refs) 个重复实例 — 点「安装并启用输入法」收敛" }
+        if installed && registered { return "已安装未启用 — 点「安装并启用输入法」" }
+        if installed { return "已安装,等待 TIS 收录 — 请注销并重新登录一次" }
         if registered { return "输入源已注册,app 未安装 — 点「安装并启用输入法」" }
         return "未安装 — 点「安装并启用输入法」"
     }
@@ -92,6 +94,16 @@ public enum IMEInstaller {
             return (noErr, true) // 已注册,重复调用会产生多余灰色实例
         }
         return (TISRegisterInputSource(bundleURL as CFURL), false)
+    }
+
+    /// 等待条件成立(TIS 状态异步传播,立即查询会误报)
+    static func waitUpTo(_ seconds: Double, interval: Double = 0.3, _ cond: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if cond() { return true }
+            usleep(useconds_t(interval * 1_000_000))
+        }
+        return cond()
     }
 
     /// 安装:拷贝 IME bundle 到 ~/Library/Input Methods 并注册(查重)
@@ -111,7 +123,11 @@ public enum IMEInstaller {
             log += "✓ TIS 已注册过(跳过重复注册)\n"
         } else {
             log += "TISRegisterInputSource = \(r.status)\n"
-            log += isRegistered() ? "✓ TIS 已可见\n" : "⚠︎ TIS 暂不可见(注销重登后登录扫描会收录)\n"
+            if waitUpTo(5) { isRegistered() } {
+                log += "✓ TIS 已可见\n"
+            } else {
+                log += "⚠︎ TIS 暂不可见 — 首次安装请注销并重新登录一次(登录扫描收录后,以后无需再注销)\n"
+            }
         }
         return log
     }
@@ -139,7 +155,8 @@ public enum IMEInstaller {
         }
         let st = TISEnableInputSource(src)
         log += "TISEnableInputSource = \(st)\n"
-        if enabledRefCount() == 1 {
+        let viewOK = waitUpTo(3) { self.enabledRefCount() == 1 }
+        if viewOK {
             log += "✓ TIS 启用视图:单实例\n"
         } else {
             log += "TIS 启用未落盘/存在多实例 → defaults 直写收敛\n"

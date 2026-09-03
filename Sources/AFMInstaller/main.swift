@@ -72,7 +72,7 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
             .frame(height: 130)
-            Text("装好后按 Ctrl+Space 切换到 AFM拼音,在任意输入框打字即可。")
+            Text("首次安装需注销重登一次(TIS 登录扫描收录),之后即永久生效;按 Ctrl+Space 切换到 AFM拼音打字。")
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .padding(20)
