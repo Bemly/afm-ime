@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import IMECore
 
 // MARK: - 候选条 SwiftUI 视图(参考 macOS 26 候选窗样式)
 
@@ -102,9 +103,15 @@ final class CandidateWindowController {
             let glass = NSGlassEffectView()
             glass.cornerRadius = 22
             glass.contentView = host
-            if #available(macOS 27.0, *) { glass.effectIsInteractive = true }
+            if #available(macOS 27.0, *) {
+                glass.effectIsInteractive = true
+                DebugLog.log("候选窗: NSGlassEffectView (27 交互式玻璃)")
+            } else {
+                DebugLog.log("候选窗: NSGlassEffectView (26)")
+            }
             p.contentView = glass
         } else {
+            DebugLog.log("候选窗: 无玻璃(系统 <26),普通视图")
             p.contentView = host
         }
         hostingView = host
@@ -137,6 +144,7 @@ final class CandidateWindowController {
         origin.x = min(max(origin.x, visible.minX + 4), max(visible.minX + 4, visible.maxX - size.width - 4))
         panel.setFrameOrigin(origin)
         panel.orderFront(nil)
+        DebugLog.log("候选窗显示 size=\(NSStringFromSize(size)) origin=\(NSStringFromPoint(origin)) caret=\(NSStringFromRect(caretRect))")
     }
 
     func hide() {

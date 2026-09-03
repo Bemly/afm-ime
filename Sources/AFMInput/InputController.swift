@@ -8,11 +8,12 @@ final class InputController: IMKInputController {
 
     static let engine: CandidateEngine? = {
         let path = Bundle.main.path(forResource: "dict", ofType: "bin") ?? "Data/dict.bin"
+        DebugLog.log("词库加载开始: \(path)")
         guard let store = try? DictStore(url: URL(fileURLWithPath: path)) else {
-            NSLog("[AFM] 词库加载失败: %@", path)
+            DebugLog.error("词库加载失败: \(path)")
             return nil
         }
-        NSLog("[AFM] 词库已加载 %@ (记录 %d)", path, store.recordCount)
+        DebugLog.log("词库已加载: 记录 \(store.recordCount), 音节 \(store.syllables.count)")
         return CandidateEngine(store: store)
     }()
 
@@ -30,29 +31,47 @@ final class InputController: IMKInputController {
 
     override init(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
+        DebugLog.log("InputController 初始化 client=\(client != nil)")
     }
 
-    override func activateServer(_ sender: Any!) {}
+    override func activateServer(_ sender: Any!) {
+        DebugLog.log("activateServer")
+    }
     override func deactivateServer(_ sender: Any!) {
+        DebugLog.log("deactivateServer → commitComposition")
         commitComposition(sender)
     }
     override func hidePalettes() {
+        DebugLog.log("hidePalettes")
         candidateWindow.hide()
     }
 
     // MARK: - 按键处理
 
     override func handle(_ event: NSEvent!, client: Any!) -> Bool {
-        guard Self.engine != nil else { return false }
-        guard let event, event.type == .keyDown else { return false }
+        guard Self.engine != nil else {
+            DebugLog.error("handle 被调用但引擎未加载,全部放行")
+            return false
+        }
+        guard let event, event.type == .keyDown else {
+            DebugLog.log("忽略非 keyDown 事件 type=\(event.map { "\($0.type)" } ?? "nil")")
+            return false
+        }
 
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if !mods.isSubset(of: [.shift, .capsLock]) { return false } // 含 cmd/ctrl/opt 一律放行
+        if !mods.isSubset(of: [.shift, .capsLock]) {
+            DebugLog.log("放行带修饰键 key chars=\(event.charactersIgnoringModifiers ?? "?") mods=\(mods.rawValue)")
+            return false
+        }
 
         guard let chars = event.charactersIgnoringModifiers, chars.count == 1,
-              let scalar = chars.unicodeScalars.first else { return false }
+              let scalar = chars.unicodeScalars.first else {
+            DebugLog.log("放行多字符事件 '\(event.charactersIgnoringModifiers ?? "?")'")
+            return false
+        }
         let key = Character(chars).lowercased().first ?? "_"
         let composing = !raw.isEmpty
+        DebugLog.log("key '\(chars)' scalar=\(scalar.value) keyCode=\(event.keyCode) composing=\(composing) raw='\(raw)'")
 
         switch true {
         case ("a"..."z").contains(key), key == "'":
@@ -61,49 +80,61 @@ final class InputController: IMKInputController {
             return true
 
         case scalar.value == 49 where composing: // 空格 → 上屏选中候选
+            DebugLog.log("空格 → 上屏选中 idx=\(selectedIndex)")
             commitCandidate(at: selectedIndex, client: client)
             return true
 
         case scalar.value == 36 where composing: // 回车 → 上屏拼音原文
+            DebugLog.log("回车 → 上屏原文 '\(raw)'")
             commit(raw, client: client)
             return true
 
         case (49...57).contains(scalar.value) where !candidates.isEmpty: // 数字 1-9 选当前页
             let idx = page * Self.perPage + Int(scalar.value) - 49
             if idx < candidates.count {
+                DebugLog.log("数字 \(Int(scalar.value) - 48) → 上屏 idx=\(idx)")
                 commitCandidate(at: idx, client: client)
                 return true
             }
+            DebugLog.log("数字越界 idx=\(idx),放行")
             return false
 
         case scalar.value == 51 where composing: // 退格
             raw.removeLast()
             aiBoostText = nil
+            DebugLog.log("退格 → raw='\(raw)'")
             refresh(client)
             return true
 
         case scalar.value == 53 where composing: // Esc 取消组词
+            DebugLog.log("Esc → 取消组词")
             clearComposition(client)
             return true
 
         case scalar.value == 125 where composing: // ↓ 高亮下一个
             moveSelection(+1)
+            DebugLog.log("↓ 选中=\(selectedIndex) 页=\(page)")
             updateCandidateWindow(client)
             return true
 
         case scalar.value == 126 where composing: // ↑ 高亮上一个
             moveSelection(-1)
+            DebugLog.log("↑ 选中=\(selectedIndex) 页=\(page)")
             updateCandidateWindow(client)
             return true
 
         case (chars == "=" || chars == "-") where composing: // =/- 翻页
             changePage(chars == "=" ? 1 : -1)
+            DebugLog.log("翻页\(chars == "=" ? "+" : "-") → 页=\(page)")
             updateCandidateWindow(client)
             return true
 
         default:
             if composing { // 标点等: 先上屏首选,标点放行
+                DebugLog.log("标点 '\(chars)' → 先上屏首选再放行")
                 commit(candidates.first?.text ?? raw, client: client)
+            } else {
+                DebugLog.log("无组词,放行 '\(chars)'")
             }
             return false
         }
@@ -120,6 +151,7 @@ final class InputController: IMKInputController {
     }
 
     override func commitComposition(_ sender: Any!) {
+        DebugLog.log("commitComposition raw='\(raw)' 首选=\(candidates.first?.text ?? "无")")
         guard !raw.isEmpty else { return }
         commit(candidates.first?.text ?? raw, client: sender)
     }
@@ -142,10 +174,15 @@ final class InputController: IMKInputController {
     }
 
     private func refresh(_ client: Any!) {
-        guard let textInput = client as? IMKTextInput else { return }
+        guard let textInput = client as? IMKTextInput else {
+            DebugLog.error("refresh: client 不符合 IMKTextInput")
+            return
+        }
         candidates = raw.isEmpty ? [] : (Self.engine?.candidates(for: raw, limit: 30) ?? [])
         selectedIndex = 0
         page = 0
+        DebugLog.log("refresh '\(raw)' → 候选 \(candidates.count) 条: "
+            + candidates.prefix(5).map { "\($0.text)(\(Int($0.score)))" }.joined(separator: " "))
 
         let marked = NSMutableAttributedString(string: raw)
         if !raw.isEmpty {
@@ -157,6 +194,7 @@ final class InputController: IMKInputController {
                                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
 
         if candidates.isEmpty {
+            DebugLog.log("无候选 → 隐藏候选窗")
             candidateWindow.hide()
             fmGeneration &+= 1
         } else {
@@ -176,6 +214,7 @@ final class InputController: IMKInputController {
     private func updateCandidateWindow(_ client: Any!) {
         guard !candidates.isEmpty else { candidateWindow.hide(); return }
         let caret = Self.caretRect(client)
+        DebugLog.log("候选窗定位 caret=\(NSStringFromRect(caret)) 选中=\(selectedIndex) 页=\(page)")
         candidateWindow.show(
             pinyin: raw,
             items: pageItems(),
@@ -183,19 +222,27 @@ final class InputController: IMKInputController {
             hasMorePages: (page + 1) * Self.perPage < candidates.count,
             caretRect: caret,
             onSelect: { [weak self] idx in
-                DispatchQueue.main.async { self?.commitCandidate(at: idx, client: self?.client()) }
+                DispatchQueue.main.async {
+                    DebugLog.log("点击候选 idx=\(idx)")
+                    self?.commitCandidate(at: idx, client: self?.client())
+                }
             })
     }
 
     private func commitCandidate(at index: Int, client: Any!) {
-        guard index < candidates.count else { return }
+        guard index < candidates.count else {
+            DebugLog.error("commitCandidate 越界 idx=\(index) 总数=\(candidates.count)")
+            return
+        }
         commit(candidates[index].text, client: client)
     }
 
     private func commit(_ text: String, client: Any!) {
         guard let textInput = client as? IMKTextInput else {
+            DebugLog.error("commit: client 不符合 IMKTextInput,仅清组词")
             clearComposition(client); return
         }
+        DebugLog.log("上屏 '\(text)'")
         textInput.insertText(NSAttributedString(string: text),
                              replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
         clearComposition(client)
@@ -222,17 +269,32 @@ final class InputController: IMKInputController {
         let snapshotRaw = raw
         let context = Self.contextBeforeCaret(client)
         let texts = candidates.prefix(Self.perPage).map(\.text)
-        guard texts.count > 1 else { return }
+        guard texts.count > 1 else {
+            DebugLog.log("FM 跳过: 候选不足")
+            return
+        }
+        DebugLog.log("FM 排队 gen=\(gen) 上文='\(context)' 拼音='\(snapshotRaw)' 候选=\(texts)")
 
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard let self else { return }
             let stillCurrent = await MainActor.run { self.raw == snapshotRaw && self.fmGeneration == gen }
-            guard stillCurrent else { return }
-            guard let best = await FMReranker.shared.rerank(context: context, pinyin: snapshotRaw, candidates: texts) else { return }
+            guard stillCurrent else {
+                DebugLog.log("FM 结果丢弃 gen=\(gen)(组词已变化)")
+                return
+            }
+            let t0 = Date()
+            guard let best = await FMReranker.shared.rerank(context: context, pinyin: snapshotRaw, candidates: texts) else {
+                DebugLog.log("FM 无结果 gen=\(gen) 耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms")
+                return
+            }
             await MainActor.run {
                 guard self.raw == snapshotRaw, self.fmGeneration == gen,
-                      best < texts.count else { return }
+                      best < texts.count else {
+                    DebugLog.log("FM 结果过期丢弃 gen=\(gen)")
+                    return
+                }
+                DebugLog.log("FM 生效 gen=\(gen): '\(texts[best])' 置顶 (耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms)")
                 self.applyAIRerank(text: texts[best])
             }
         }

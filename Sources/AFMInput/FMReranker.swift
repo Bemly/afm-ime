@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import IMECore
 
 /// 端侧 FM 候选重排:根据上文语境把最合适的候选提到首位。
 /// 设计:每次新建 session(创建仅 ~1ms,无 transcript 增长,延迟稳定 ~0.3s);
@@ -17,7 +18,10 @@ final class FMReranker {
 
     /// 返回 FM 选中的候选在入参 candidates 中的下标;不可用/失败/无法解析返回 nil
     func rerank(context: String, pinyin: String, candidates: [String]) async -> Int? {
-        guard available, !candidates.isEmpty else { return nil }
+        guard available, !candidates.isEmpty else {
+            DebugLog.log("FM 不可用或无候选 available=\(available)")
+            return nil
+        }
         let numbered = candidates.enumerated()
             .map { "\($0.offset + 1).\($0.element)" }
             .joined(separator: " ")
@@ -26,15 +30,21 @@ final class FMReranker {
         拼音:\(pinyin)
         候选:\(numbered)
         """
+        DebugLog.log("FM 请求: \(prompt.replacingOccurrences(of: "\n", with: " | "))")
         guard #available(macOS 26.0, *) else { return nil }
+        let t0 = Date()
         do {
             let session = LanguageModelSession(
                 model: SystemLanguageModel.default,
                 instructions: Self.instructions)
             let resp = try await session.respond(to: prompt)
-            return Self.firstIndex(in: resp.content, upperBound: candidates.count)
+            let ms = String(format: "%.0f", -t0.timeIntervalSinceNow * 1000)
+            DebugLog.log("FM 响应(\(ms)ms): '\(resp.content)'")
+            let idx = Self.firstIndex(in: resp.content, upperBound: candidates.count)
+            DebugLog.log("FM 解析: idx=\(idx.map(String.init) ?? "nil")")
+            return idx
         } catch {
-            NSLog("[AFM][FM] rerank 失败: \(error)")
+            DebugLog.error("FM rerank 失败: \(error) (耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms)")
             return nil
         }
     }

@@ -18,8 +18,12 @@ public final class CandidateEngine {
     }
 
     public func candidates(for rawInput: String, limit: Int = 20) -> [Candidate] {
+        let t0 = Date()
         let segs = segmenter.segment(rawInput)
-        guard !segs.isEmpty else { return [] }
+        guard !segs.isEmpty else {
+            DebugLog.log("引擎[\(rawInput)] 无合法切分")
+            return []
+        }
 
         var best: [String: Candidate] = [:]
         for seg in segs {
@@ -32,6 +36,8 @@ public final class CandidateEngine {
                 best[hit.word] = Candidate(text: hit.word, pinyin: hit.key, score: score)
             }
         }
-        return Array(best.values.sorted { $0.score > $1.score }.prefix(limit))
+        let out = Array(best.values.sorted { $0.score > $1.score }.prefix(limit))
+        DebugLog.log("引擎[\(rawInput)] 切分=\(segs.map { $0.syllables.joined(separator: "'") }.joined(separator: " / ")) → \(out.count) 条, \(String(format: "%.2f", -t0.timeIntervalSinceNow * 1000))ms")
+        return out
     }
 }

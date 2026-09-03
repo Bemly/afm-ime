@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let connName = (Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String) ?? "AFMInput_Connection"
         server = IMKServer(name: connName, bundleIdentifier: Bundle.main.bundleIdentifier)
+        DebugLog.log("输入法启动: bundle=\(Bundle.main.bundleIdentifier ?? "?") connection=\(connName) debug=\(DebugLog.isDebug) 日志=\(DebugLog.logPath) 词库引擎=\(InputController.engine != nil)")
         NSLog("[AFM] IMKServer 已启动 connection=%@ bundle=%@", connName, Bundle.main.bundleIdentifier ?? "?")
     }
 }
