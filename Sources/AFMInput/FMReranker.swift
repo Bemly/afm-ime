@@ -11,9 +11,7 @@ final class FMReranker {
     private static let sentenceInstructions = "你是中文拼音输入法的整句预测引擎。把用户输入的拼音串转成最通顺的中文。只输出中文结果,禁止解释、禁止重复拼音。"
 
     private var available: Bool {
-        if #available(macOS 26.0, *) {
-            if case .available = SystemLanguageModel.default.availability { return true }
-        }
+        if case .available = SystemLanguageModel.default.availability { return true }
         return false
     }
 
@@ -32,7 +30,6 @@ final class FMReranker {
         候选:\(numbered)
         """
         DebugLog.log("FM 请求: \(prompt.replacingOccurrences(of: "\n", with: " | "))")
-        guard #available(macOS 26.0, *) else { return nil }
         let t0 = Date()
         do {
             let session = LanguageModelSession(
@@ -61,7 +58,6 @@ final class FMReranker {
         把拼音转成中文,只输出中文本身,不要解释。
         """
         DebugLog.log("FM 整句请求: 拼音='\(pinyin)' 上文='\(context)'")
-        guard #available(macOS 26.0, *) else { return nil }
         let t0 = Date()
         do {
             let session = LanguageModelSession(
@@ -98,7 +94,6 @@ final class FMReranker {
         let instructions = toEnglish
             ? "你是翻译引擎。把用户输入的中文翻译成地道的英文。只输出译文,不要解释、不要加引号。"
             : "你是翻译引擎。把用户输入的外文翻译成通顺的简体中文。只输出译文,不要解释、不要加引号。"
-        guard #available(macOS 26.0, *) else { return nil }
         let t0 = Date()
         do {
             let session = LanguageModelSession(

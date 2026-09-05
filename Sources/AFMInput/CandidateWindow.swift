@@ -333,12 +333,8 @@ struct FrameReporter: ViewModifier {
     let model: CandidateDropletModel
 
     func body(content: Content) -> some View {
-        if #available(macOS 15.0, *) {
-            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named("candBar")) } action: { _, new in
-                model.noteCellFrame(index, new) // 写 @Published 触发水滴重算(布局本身不变,无循环)
-            }
-        } else {
-            content
+        content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named("candBar")) } action: { _, new in
+            model.noteCellFrame(index, new) // 写 @Published 触发水滴重算(布局本身不变,无循环)
         }
     }
 }
@@ -348,12 +344,8 @@ struct RowFrameReporter: ViewModifier {
     let model: CandidateDropletModel
 
     func body(content: Content) -> some View {
-        if #available(macOS 15.0, *) {
-            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named("candBar")) } action: { _, new in
-                model.noteRowFrame(new)
-            }
-        } else {
-            content
+        content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named("candBar")) } action: { _, new in
+            model.noteRowFrame(new)
         }
     }
 }
@@ -407,14 +399,9 @@ struct DropletOverlayView: View {
 
     /// 玻璃水滴本体(26+ 系统玻璃/<26 白色半透明)+ 投影
     @ViewBuilder private func blobGlass(_ f: CGRect) -> some View {
-        Group {
-            if #available(macOS 26.0, *) {
-                Color.clear.glassEffect(.regular.interactive(), in: Capsule())
-            } else {
-                Capsule().fill(.white.opacity(0.22))
-            }
-        }
-        .frame(width: f.width, height: f.height)
+        Color.clear
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .frame(width: f.width, height: f.height)
         .shadow(color: .black.opacity(0.22 * model.press), radius: 4 + 3 * model.press, y: 2)
         .offset(x: f.minX, y: f.minY)
     }
@@ -422,7 +409,7 @@ struct DropletOverlayView: View {
     /// 折射的幽灵层: 幽灵行(强调色)经 Metal lens 掩膜+折射,仅水滴内可见
     /// (构建期 default.metallib 缺失 → maskShader nil → 无此层,水滴退化为纯玻璃)
     @ViewBuilder private func ghostRefracted(_ f: CGRect) -> some View {
-        if #available(macOS 14.0, *), model.rowFrame.width > 0,
+        if model.rowFrame.width > 0,
            let shader = DropletLens.maskShader(
             rect: CGRect(x: f.minX - model.rowFrame.minX, y: f.minY - model.rowFrame.minY,
                          width: f.width, height: f.height),
@@ -538,12 +525,8 @@ private struct CandidateGridView: View {
 
 /// 玻璃形状容器(macOS 26+): 让容器内的选中胶囊与其他玻璃形状融合,配合 glassEffectID
 /// 实现形状间流动变形;<26 直接渲染
-@ViewBuilder fileprivate func glassFlowContainer(@ViewBuilder _ content: () -> some View) -> some View {
-    if #available(macOS 26.0, *) {
-        GlassEffectContainer(spacing: 4) { content() }
-    } else {
-        content()
-    }
+fileprivate func glassFlowContainer(@ViewBuilder _ content: () -> some View) -> some View {
+    GlassEffectContainer(spacing: 4) { content() }
 }
 
 /// 网格选中格的液态玻璃胶囊(macOS 26+ 系统 glassEffect,同系统候选窗/工具栏质感;
@@ -555,15 +538,11 @@ private struct LiquidGlassPill: ViewModifier {
 
     func body(content: Content) -> some View {
         if selected {
-            if #available(macOS 26.0, *) {
-                if let ns {
-                    content.glassEffect(.regular.interactive(), in: Capsule())
-                        .glassEffectID(id, in: ns)
-                } else {
-                    content.glassEffect(.regular.interactive(), in: Capsule())
-                }
+            if let ns {
+                content.glassEffect(.regular.interactive(), in: Capsule())
+                    .glassEffectID(id, in: ns)
             } else {
-                content.background(Capsule().fill(.white.opacity(0.22)))
+                content.glassEffect(.regular.interactive(), in: Capsule())
             }
         } else {
             content
@@ -620,19 +599,12 @@ final class CandidateWindowController {
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
         container.wantsLayer = true
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.cornerRadius = 22
-            glass.contentView = barHost
-            if #available(macOS 27.0, *) {
-                glass.effectIsInteractive = true
-            }
-            container.addSubview(glass)
-            glassView = glass
-        } else {
-            container.addSubview(barHost)
-            glassView = nil
-        }
+        let glass = NSGlassEffectView()
+        glass.cornerRadius = 22
+        glass.effectIsInteractive = true
+        glass.contentView = barHost
+        container.addSubview(glass)
+        glassView = glass
         let overlay = PassthroughHostingView(rootView: DropletOverlayView(
             model: InputController.dropletModel,
             marginH: Self.marginH, marginV: Self.marginV))

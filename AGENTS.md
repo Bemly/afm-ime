@@ -44,14 +44,19 @@ AFM拼音.app (安装到 ~/Library/Input Methods/)
 4. **M4 FM 接入** — 进程内 FoundationModels(fm CLI 回退通道预留、尚未接线);候选重排 + 整句预测
 5. **M5 收尾** — package/install/uninstall 脚本 + SwiftUI 安装器 GUI;debug 标志文件 + /tmp 日志体系;首次注销重登收录
 
-## 构建 / 安装(无 Xcode 流程)
+## 构建 / 安装(macOS 27 基线,Xcode 构建)
 
 ```sh
-swift build -c release
-scripts/build_dict.sh   # 词库源变更后全量重编 Data/dict.bin(rime-ice+外部词库+梗合集,~22s)
-scripts/package.sh   # 组装 .app bundle + codesign -fs -
+scripts/package.sh   # 构建主路径: xcodebuild -scheme afm-ime-Package(Xcode 工具链,macOS 27 SDK)
+                     #   + Metal/DropletLens.metal → default.metallib(xcrun metal -fcikernel 不需要,layerEffect 无需该标记)
+                     # Xcode 缺失时自动回退 swift build -c release(CLT,SDK 同为 27;水滴无折射)
+scripts/build_dict.sh   # 词库源变更后全量重编 Data/dict.bin(rime-ice+外部词库,~22s)
 # 安装: 拷贝到 ~/Library/Input Methods/,launchd 按需拉起,系统设置 → 键盘 → 输入法 → + → 简体中文 → AFM拼音
 ```
+
+- **平台基线 macOS 27**(Package.swift `platforms: [.macOS("27.0")]`,字符串版本——`.v27` 常量在 tools 6.2 manifest 尚不存在);`swiftLanguageModes: [.v5]` 保持既有并发语义;所有 pre-27 `#available` 分支已删(FoundationModels/玻璃/layerEffect/onGeometryChange 等,27 基线恒可用)
+- Xcode 26+ 的 Metal 工具链是独立组件:`DEVELOPER_DIR=<Xcode> xcodebuild -downloadComponent metalToolchain`(838.9MB)
+- Xcode 可直接打开 Package.swift 包构建调试(File → Open);命令行主路径是 xcodebuild,产物在 `.build/xcode/Build/Products/Release/`
 
 ## FM 延迟基准(2026-09-03 实测,本机)
 

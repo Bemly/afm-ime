@@ -8,7 +8,30 @@ cd "$(dirname "$0")/.."
 SIGN_ID="AFM-IME-Dev"
 security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_ID" || SIGN_ID="-"
 
-swift build -c release
+# 构建: xcodebuild(Xcode 工具链 + macOS 27 SDK,平台基线 platforms: [.macOS("27.0")])。
+# Xcode 缺失/构建失败时回退 swift build(CLT,SDK 同为 27)。
+XDEV="${DEVELOPER_DIR:-}"
+if [ -z "$XDEV" ]; then
+  for c in /Applications/Xcode.app/Contents/Developer /Applications/Xcode-beta.app/Contents/Developer; do
+    [ -d "$c" ] && XDEV="$c" && break
+  done
+fi
+BINDIR=""
+if [ -n "$XDEV" ] && [ -d "$XDEV" ]; then
+  if DEVELOPER_DIR="$XDEV" xcodebuild -scheme afm-ime-Package -configuration Release \
+       -destination 'platform=macOS' -derivedDataPath .build/xcode build >/dev/null; then
+    BINDIR=".build/xcode/Build/Products/Release"
+    echo "构建完成: xcodebuild (macOS 27 SDK, DEVELOPER_DIR=$XDEV)"
+  else
+    echo "!! xcodebuild 构建失败,回退 swift build(CLT)"
+  fi
+else
+  echo "!! 未找到 Xcode(DEVELOPER_DIR 未设且 /Applications 无 Xcode*.app),回退 swift build(CLT)"
+fi
+if [ -z "$BINDIR" ]; then
+  swift build -c release
+  BINDIR=".build/release"
+fi
 
 # Metal shader → default.metallib(候选条水滴折射 layerEffect)。
 # 需要 Xcode 的 Metal Toolchain(Xcode 26+ 组件缺失时: DEVELOPER_DIR=<Xcode> xcodebuild -downloadComponent metalToolchain);
@@ -35,7 +58,7 @@ fi
 APP="build/AFM拼音.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/afm-input "$APP/Contents/MacOS/AFMInput"
+cp "$BINDIR/afm-input" "$APP/Contents/MacOS/AFMInput"
 cp Data/dict.bin "$APP/Contents/Resources/dict.bin"
 [ -n "$METALLIB" ] && cp "$METALLIB" "$APP/Contents/Resources/default.metallib"
 [ -f Data/icon.tiff ] && cp Data/icon.tiff "$APP/Contents/Resources/icon.tiff"
@@ -110,7 +133,7 @@ echo "打包完成: $APP (签名: $SIGN_ID)"
 INSTALLER="build/AFM拼音安装器.app"
 rm -rf "$INSTALLER"
 mkdir -p "$INSTALLER/Contents/MacOS" "$INSTALLER/Contents/Resources"
-cp .build/release/afm-installer "$INSTALLER/Contents/MacOS/AFMInstaller"
+cp "$BINDIR/afm-installer" "$INSTALLER/Contents/MacOS/AFMInstaller"
 cp -R "$APP" "$INSTALLER/Contents/Resources/"
 cp Data/appicon.tiff "$INSTALLER/Contents/Resources/appicon.tiff"
 cat > "$INSTALLER/Contents/Info.plist" <<'PLIST'

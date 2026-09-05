@@ -4,7 +4,6 @@ import SwiftUI
 /// Metal/DropletLens.metal 编译成 default.metallib 放进 bundle,运行时 SwiftUI layerEffect 直接吃——
 /// 无 deprecated API、无快照、全 GPU。
 /// default.metallib 缺失(无 Xcode 的构建)时返回 nil → 水滴退化为纯玻璃无折射。
-@available(macOS 14.0, *)
 enum DropletLens {
     static var isAvailable: Bool {
         Bundle.main.url(forResource: "default", withExtension: "metallib") != nil

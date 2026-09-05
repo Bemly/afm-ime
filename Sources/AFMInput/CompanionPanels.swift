@@ -283,14 +283,10 @@ final class ClipboardPanelController {
         p.hidesOnDeactivate = false
         p.becomesKeyOnlyIfNeeded = true
         let host = NSHostingView(rootView: ClipboardBarView(model: model))
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.cornerRadius = 18
-            glass.contentView = host
-            p.contentView = glass
-        } else {
-            p.contentView = host
-        }
+        let glass = NSGlassEffectView()
+        glass.cornerRadius = 18
+        glass.contentView = host
+        p.contentView = glass
         hosting = host
         panel = p
         return p
@@ -451,14 +447,10 @@ final class TranslatePanelController {
         p.hidesOnDeactivate = false
         p.becomesKeyOnlyIfNeeded = false
         let host = NSHostingView(rootView: TranslateBarView(model: model))
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.cornerRadius = 18
-            glass.contentView = host
-            p.contentView = glass
-        } else {
-            p.contentView = host
-        }
+        let glass = NSGlassEffectView()
+        glass.cornerRadius = 18
+        glass.contentView = host
+        p.contentView = glass
         hosting = host
         panel = p
         return p

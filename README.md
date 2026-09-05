@@ -1,8 +1,8 @@
 # AFM拼音 (afm-ime)
 
-macOS 液态玻璃(Liquid Glass)风格中文拼音输入法,端侧 Apple Foundation Models 大模型增强候选预测。**纯 Swift、无第三方依赖、无需 Xcode**(CommandLineTools 即可构建)。
+macOS 液态玻璃(Liquid Glass)风格中文拼音输入法,端侧 Apple Foundation Models 大模型增强候选预测。**纯 Swift、无第三方依赖;macOS 27+,Xcode 构建(水滴折射需要其 Metal 工具链,无 Xcode 亦可构建、仅水滴无折射)**。
 
-![平台](https://img.shields.io/badge/macOS-26%2B%20(Apple%20Intelligence)-blue) ![构建](https://img.shields.io/badge/Swift-6.4-orange)
+![平台](https://img.shields.io/badge/macOS-27%20(Apple%20Intelligence)-blue) ![构建](https://img.shields.io/badge/Swift-6.4%20·%20Xcode-orange)
 
 ## 功能
 
@@ -23,9 +23,9 @@ macOS 液态玻璃(Liquid Glass)风格中文拼音输入法,端侧 Apple Foundat
 ## 构建 / 安装
 
 ```sh
-swift build -c release
 scripts/build_dict.sh       # 词库源变更后全量重编 Data/dict.bin(rime-ice+外部词库+梗合集)
-scripts/package.sh          # 产出 build/AFM拼音.app + build/AFM拼音安装器.app
+scripts/package.sh          # xcodebuild(Xcode 工具链,macOS 27 SDK)+ Metal shader → default.metallib
+                            # 无 Xcode 时自动回退 swift build(CLT),水滴退化为无折射
 open build/AFM拼音安装器.app # GUI:一键 安装→启用→选中
 ```
 

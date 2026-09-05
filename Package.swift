@@ -1,9 +1,9 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
     name: "afm-ime",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS("27.0")],
     targets: [
         .target(name: "IMECore", path: "Sources/IMECore"),
         .executableTarget(name: "dictcompiler", dependencies: ["IMECore"], path: "Sources/DictCompiler"),
@@ -14,5 +14,6 @@ let package = Package(
         .executableTarget(name: "dbg", dependencies: ["IMECore"], path: "Sources/Debug"),
         .executableTarget(name: "afm-input", dependencies: ["IMECore"], path: "Sources/AFMInput"),
         .executableTarget(name: "afm-installer", dependencies: ["IMECore"], path: "Sources/AFMInstaller"),
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )
