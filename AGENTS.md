@@ -18,17 +18,19 @@ macOS 27 液态玻璃(Liquid Glass)风格的中文拼音输入法,调用端侧 A
 ```
 AFM拼音.app (安装到 ~/Library/Input Methods/)
 ├── 引擎层(纯 Swift,SPM,无第三方依赖)
-│   ├── 词库编译器: rime-ice + 外部词库(萌娘/zhwiki/mcwiki/BA/THUOCL/ali-words/梗合集) → 二进制 dict.bin(349.7 万条/145MB,mmap 加载 <1ms,scripts/build_dict.sh 一键全量重编)
+│   ├── 词库编译器: rime-ice + 外部词库(萌娘/zhwiki/mcwiki/BA/THUOCL/ali-words/梗合集) → 二进制 dict.bin(698.6 万条/249MB,含简拼派生键,mmap 加载 <1ms,scripts/build_dict.sh 一键全量重编)
 │   ├── 拼音切分: 逆序 DP 枚举 ≤12 路音节切分,尾音节允许不完整;模糊音 zh/z ch/c sh/s + 前后鼻音已实现(查询期变体展开,精确优先;v→ü 未实现)
-│   └── 候选生成: 多路切分 + mmap 二分前缀查表,按词频权重打分合并(纯查表、按词输入、不做 Viterbi 组句,见决策记录)
+│   └── 候选生成: 多路切分 + mmap 二分前缀查表 + 词格 DP 整句组词(单主路径 composeSentence)+ 用户词频乘法加成,按词频权重打分合并(见决策记录)
 ├── FM 层(端侧大模型,当前仅进程内单通道)
 │   ├── 进程内 import FoundationModels(SystemLanguageModel),每次新建无状态 session
 │   ├── (fm CLI 子进程回退通道仅做过延迟基准、尚未接线;不可用时直接静默降级纯词典)
 │   ├── 用途①: 结合上文对词典候选异步重排序(到达后无感刷新候选窗)
-│   └── 用途②: 长句拼音直接让模型预测整句/短语(词典切不出时兜底,光标处先显示占位)
+│   ├── 用途②: 长句拼音直接让模型预测整句/短语(词典切不出时兜底,光标处先显示占位)
+│   └── 用途③: ⌃F 翻译面板的译文生成(中↔英方向自动,见伴随面板)
 └── UI 层
     ├── NSPanel + NSGlassEffectView 真·液态玻璃(圆角/透明/高光/亮暗自适应,macOS 27 开交互式玻璃;<26 退化普通视图)
     ├── 行内 markedText 下划线显示拼音(候选条内不再放拼音框) + 候选词网格、首选高亮 pill、序号、翻页、✦ 标 FM 候选
+    ├── 伴随面板: ⌃V 剪贴板历史 / ⌃F 翻译(同款液态玻璃;候选条在→浮其下方,放不下→上方;不在→光标所在屏幕右上角)
     └── 跟随光标定位(client caret rect,缺失时回退屏幕底部居中),点选上屏,数字键 1-9 选词
 ```
 
@@ -111,8 +113,8 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - rime-ice 词库下载已获用户同意(用户指定必须用 rime 词库)
 - FM 不可用/无权限/被安全层拦截时静默返回 nil → 直接纯词典模式,不阻塞输入;fm CLI 子进程回退通道预留但当前未接线
 - 进程内 FoundationModels 需 Apple Intelligence 已开启(本机 `fm available` 已确认)
-- **按词输入、纯查表、不做 Viterbi/词图整句组句**:CandidateEngine 只做多路切分 + 前缀查表 + 权重合并;跨词整句交给 FM 用途②兜底
-- **模糊音(zh/z、ch/c、sh/s、v→ü)尚未实现**:PinyinSegmenter 目前只接受标准全拼音节,是明确的后续项
+- **按词输入、纯查表为主 + 单路径词格 DP 组句(2026-09-05 91e7e1b 起修订)**:CandidateEngine 主体仍是多路切分 + 前缀查表 + 权重合并;主切分路径纯全拼且词库无整句短语时,`composeSentence` 在音节序列上做词格 DP/Viterbi 用词典词覆盖全部音节出整句候选(跨词上下文纠偏仍交给 FM 用途②);不做多路径全词图
+- ~~模糊音尚未实现~~(已过时):模糊拼音已于 2026-09-05 实现,见下「模糊拼音」条目;v→ü 仍是唯一未做项
 - FM session 每次新建、不带 transcript;上文由 InputController 取光标前 ≤60 字随请求显式传入
 - **外部词库接入(2026-09-05,用户指定 6 源 + 自维护梗合集)**:DictCompiler 新增 5 种输入模式(--rime 无声调 yaml / --apostrophe 撇号拼音 txt / --freq 词频 TSV / --wordlist 源码提取 / --md-keywords markdown 首列),全在 scripts/build_dict.sh 固化;纯拉丁词与含 XX 占位符词条不收(拼音不可键入);同 key 候选超 exactCap=32 时低权重词会被截断,长尾仍由 FM 整句兜底
 - **模糊拼音(2026-09-05)**:选**查询期变体展开**而非 rime 式编译期 derive——不动 dict.bin(省 ~15% 体积),规则改起来不用重编词库。CandidateEngine.candidates() 为前 3 条切分路径生成模糊变体键一并查询:zh↔z ch↔c sh↔s + an↔ang en↔eng in↔ing(按后缀匹配,ian↔iang uan↔uang 自然覆盖);每键变体含原键封顶 8(笛卡尔积截断),模糊命中 ×0.5 保证精确拼音候选优先;模糊查询用小 extCap/scanBudget(48/2 万)控耗时,热循环实测零退化(0.15ms)。自动纠错(移位容错,与「李娜/去哪」类词有冲突需调)未做
@@ -120,6 +122,8 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - **分段转换 + 整句预编辑(2026-09-05,修 Electron 删词不可靠)**:渐进前缀词选中时**不真正上屏**——词进 committedBuffer、剩余拼音留 raw,整句(已转换段+剩余拼音)以 setMarkedText 保持下划线预编辑态;最终上屏(空格满键/回车/标点/失焦)才 insertText(缓冲+文本) 一次写入。退格撤销=纯内存回退缓冲与 raw(不动应用文本)——**不能走 IMK 替换删除**:Chromium 系对 insertText 的 replacementRange 支持残缺,删词静默失败。commitComposition/clearComposition 同步清 committedBuffer/undoStack
 - **Shift 组词中行为(用户纠偏)**:轻点 Shift 时组词中上屏**拼音原文**(↩ 行为),不是第一候选——shiftTappedToggle 必须直接 flush(raw),不能走 commitComposition(它上屏 candidates.first,等于空格行为)
 - **中英模式与全角标点(2026-09-05,踩坑链完整版)**:① IMK **默认只投递 keyDown**,flagsChanged 必须覆写 `recognizedEvents(_:)` 返回 `[.keyDown, .flagsChanged]` 才会送达(AppKit 应用可达,fcitx5-macos 同款);② **Electron/Chromium 系应用(VSCode/Chrome/ZCode)根本不向输入法转发修饰键事件**,IMK 路线在这些应用里是死路(recognizedEvents 声明也无效,实测 0 事件);③ **方向键 keyDown 自带 function|numericPad 修饰位(0xA00000)**,mods 判定前必须剔除,否则 ←/→/↑/↓ 全被当"带修饰键"放行(dac0262 的 ↑↓ 修复因此从未真正生效);④ Shift 中英切换最终方案 = **ShiftModeMonitor(CGMEventTap .cgSessionEventTap + listen-only)全局监听**,IME 进程创建 tap 实测无需 TCC 授权(输入法属受信输入子系统);若创建失败在 activateServer 重试。切模式时组词先上屏拼音原文;模式写 UserDefaults(key AFMEnglishMode)跨重启。英文模式 handle 全直通;中文模式标点映射全角(，。；：？！（）【】「」《》、·～,`$`→￥、`_`→——、`^`→……),引号 `'`→''、`"`→"" 成对交替,`-`/`=`/空格/数字保持半角;**部分客户端 shift+标点的 charactersIgnoringModifiers 不带上档效果**(shift+1 给 '1'),handle 里用 shiftedSymbols 表还原(shift+数字因此不触发选词);候选条 ◂/▸ 鼠标点击翻页(onPage 回调)。注意:合成按键(CUAGEventPostToPid)不经过系统事件流,session tap 看不到,只能真机键盘验证
+- **用户词频(2026-09-05)**:IMECore/UserFreq,UserDefaults 字典 [word: count](key AFMUserFreq)持久化,容量 5000 按次数淘汰,保存防抖 2s;**按词记录不按键**(nhao 选的 你好 对 nihao 同样生效);加成 = min(1 + 0.5·log10(1+count), 3.0) 乘在最终排序前(10 次 ×1.5 / 100 次 ×2 / 1000 次 ×2.5,封顶防霸榜);>50 字整句不计数;词典权重本身不动,空表零开销(热循环 0.22ms 不变)
+- **伴随面板(2026-09-05,⌃V 剪贴板 / ⌃F 翻译)**:CompanionPanels.swift 单文件;① **定位**=候选条 frame(候选窗 onFrameChange 回调回写 latestCandidateFrame)下方 8px,下方放不下→上方,再不行钳回屏内;无候选条→光标所在屏幕右上角(visibleFrame 排除菜单栏/Dock);两面板互斥;② **焦点模型是关键坑**:IME 进程 `setActivationPolicy(.prohibited)` 收不到键盘事件,面板(数字选词/翻译输入)打开时临时切 `.accessory` + activate + makeKey,关闭恢复 `.prohibited` + deactivate 还焦点;resignKey(点回别的应用)自动收起;③ **插入时序**:面板 close 还焦点 → 0.15s 后 insertText(目标客户重新活跃后 IMK 插入才可靠);组词中先按空格语义上屏首选再插入;④ 剪贴板 ClipboardMonitor 常驻轮询 NSPasteboard changeCount(1s),只收文本(2 万字截断/50 条/去重置顶),落盘 Application Support/AFM拼音/clipboard-history.json;⑤ 翻译用 FMReranker.translate(方向自动:含中文→英,否则→中);⑥ 快捷键拦截规则:⌃V/⌃F 中英模式都拦,option/command/shift 组合不拦,**自己的面板持键时 handle 全放行**(翻译框内 ⌘V/⌃V 原生行为保留);⌘V 原生粘贴不受影响;已知取舍:终端里 ⌃V(quoted-insert)/⌃F(forward-char)被面板接管
 
 ## 安装要点(M2 实测踩坑)
 
