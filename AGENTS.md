@@ -138,6 +138,14 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 
 **结论(两条路径)**:① **本机开发/自用**——ad-hoc 签名即可:装 ~/Library/Input Methods → 自身二进制递交 register → defaults 写 base+mode 启用条目 → logout/login 一次 → 永久生效(已验证);② **对外分发**——必须 Apple Developer 账号 → Developer ID 签名 + notarytool 公证 + stapler staple,否则别人机器上没有手动递交环节、登录扫描不会收录。
 
+## 代码签名与 TCC(2026-09-05,Shift tap 依赖)
+
+- **ad-hoc 签名的 designated requirement = cdhash,每次构建都变** → TCC「输入监控」授权随构建失效 → CGEventTap **静默失明**(tapCreate 照样返回成功,但零事件投递、无任何报错——最阴的坑,探针+HID 级合成事件注入可确诊)
+- 修法:**自签证书 `AFM-IME-Dev`**(CN=AFM-IME-Dev,keyUsage=digitalSignature + extendedKeyUsage=codeSigning,openssl 生成,证书/私钥 PEM 分开导入 login keychain,`-T /usr/bin/codesign` 白名单)→ DR 变为 `identifier + certificate leaf`,**授权一次跨构建有效**
+- 坑①: macOS `security` 不认 OpenSSL 3 默认 PKCS12 加密(MAC verification failed)→ 改 PEM 分开导入;坑②: CN 含中文在 keychain 里乱码导致 codesign 匹配失败(unknown exception)→ 证书名用纯 ASCII;坑③: codesign 首次用钥私钥会弹钥匙串授权框,需输开机密码点允许
+- package.sh 自动检测证书,缺失回退 ad-hoc;证书重建(换机/丢 keychain)会变 DR,需重新授权输入监控
+- 授权入口: 系统设置 → 隐私与安全性 → 输入监控 → 添加 AFM拼音
+
 ## 启用状态管理(M2 实测补充)
 
 - 添加选择器里的**灰色条目 = 已启用所以不可再选**(简体拼音也显示灰色),不是异常;重复灰条来自重复 register/enable——因此 IMEInstaller.register 先查重、enable 先 disableAll 收敛,最终启用列表固定为 base+mode 两条(见下节)

@@ -3,6 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 签名: 优先自签证书 AFM-IME-Dev(DR=证书绑定,TCC「输入监控」授权跨构建有效,Shift tap 依赖);
+# 证书缺失回退 ad-hoc(DR=cdhash,每次构建变化,授权会失效)。证书生成方法见 AGENTS.md
+SIGN_ID="AFM-IME-Dev"
+security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_ID" || SIGN_ID="-"
+
 swift build -c release
 
 APP="build/AFM拼音.app"
@@ -75,8 +80,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --sign - "$APP"
-echo "打包完成: $APP"
+codesign --force --sign "$SIGN_ID" "$APP"
+echo "打包完成: $APP (签名: $SIGN_ID)"
 
 # 安装器 App(内嵌 IME,一键安装+启用+直达输入源设置)
 INSTALLER="build/AFM拼音安装器.app"
@@ -103,5 +108,5 @@ cat > "$INSTALLER/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$INSTALLER"
+codesign --force --sign "$SIGN_ID" "$INSTALLER"
 echo "打包完成: $INSTALLER"
