@@ -36,8 +36,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>AFM拼音</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>2026.09.04</string>
-	<key>CFBundleVersion</key><string>20260904</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.05</string>
+	<key>CFBundleVersion</key><string>20260905</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSBackgroundOnly</key><false/>
 	<key>LSUIElement</key><true/>
@@ -96,8 +96,8 @@ cat > "$INSTALLER/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>AFM拼音安装器</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音安装器</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>2026.09.04</string>
-	<key>CFBundleVersion</key><string>20260904</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.05</string>
+	<key>CFBundleVersion</key><string>20260905</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict>

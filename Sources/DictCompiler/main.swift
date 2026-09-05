@@ -2,8 +2,13 @@ import Foundation
 import Darwin
 import IMECore
 
-// rime-ice cn_dicts → dict.bin v1
+// rime-ice cn_dicts + 外部词库 → dict.bin v1
 // 用法: dictcompiler --cn-dicts <dir> --out <path>
+//        [--rime <file>...]        无声调 rime yaml(词\t拼音[\t权重]),如 moegirl / zhwiki
+//        [--apostrophe <file>...]  撇号拼音 txt(词\tq'y[\t权重];权重缺省/0 → 100),如 minecraft / BA
+//        [--freq <file>...]        词频 TSV(词\t频次 → 自动注音,权重 = clamp(频次, 1...100_000)),如 THUOCL
+//        [--wordlist <file>...]    从文本/源码提取引号内 CJK 词 → 自动注音(权重 100),如 ali-words
+//        [--md-keywords <file>...] markdown 表第一列关键词(梗合集) → 自动注音(权重 100)
 // - 8105.dict.yaml 作为单字注音表(多音字多行,取字频比 ≥5% 的读音参与注音,与 rime 同策略)
 // - base/ext/41448/8105 自带拼音直接收录;tencent 单列词库自动注音
 // - 合并去重 (key,word) 取 max(weight);Records 按 (key, weight 降序, word) 排序写入
@@ -19,8 +24,17 @@ func arg(_ name: String) -> String? {
     guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
     return args[i + 1]
 }
+/// 可重复标志的全部取值(--flag v1 --flag v2 → [v1, v2])
+func repeatedArgs(_ name: String) -> [String] {
+    var out: [String] = []
+    var i = 1
+    while i < args.count {
+        if args[i] == name, i + 1 < args.count { out.append(args[i + 1]); i += 2 } else { i += 1 }
+    }
+    return out
+}
 guard let dictDir = arg("--cn-dicts"), let outPath = arg("--out") else {
-    print("用法: dictcompiler --cn-dicts <cn_dicts目录> --out <dict.bin>")
+    print("用法: dictcompiler --cn-dicts <cn_dicts目录> --out <dict.bin> [--rime f]... [--apostrophe f]... [--freq f]... [--wordlist f]...")
     exit(2)
 }
 
@@ -28,25 +42,29 @@ let t0 = Date()
 let fm = FileManager.default
 let sylPattern = try! NSRegularExpression(pattern: "^[a-z]+$")
 
-// MARK: - dict.yaml 解析
+// MARK: - 逐行读取(流式,防 zhwiki 167 万行整体载入内存)
 
-/// 返回 `...` 之后的词条行(跳过注释/空行),列按 \t 分隔
-func parseYaml(_ path: String) -> [[String]] {
-    guard let raw = fm.contents(atPath: path), let text = String(data: raw, encoding: .utf8) else {
-        print("!! 无法读取 \(path)"); exit(1)
+func forEachLine(_ path: String, _ body: (String) -> Void) {
+    guard let raw = fm.contents(atPath: path) else { print("!! 无法读取 \(path)"); exit(1) }
+    // 优先 UTF-8,失败退 UTF-16(BA 部分文件为 UTF-16)
+    guard let text = String(data: raw, encoding: .utf8) ?? String(data: raw, encoding: .utf16) else {
+        print("!! \(path) 编码无法识别"); exit(1)
     }
-    var rows: [[String]] = []
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) { body(String(line)) }
+}
+
+/// dict.yaml 正文行(`...` 之后,跳过注释/空行),列按 \t 分隔
+func forEachYamlRow(_ path: String, _ body: ([String]) -> Void) {
     var inBody = false
-    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+    forEachLine(path) { line in
         if !inBody {
             if line.hasPrefix("...") { inBody = true }
-            continue
+            return
         }
         let l = line.trimmingCharacters(in: .whitespaces)
-        if l.isEmpty || l.hasPrefix("#") { continue }
-        rows.append(l.components(separatedBy: "\t").map { $0.trimmingCharacters(in: .whitespaces) })
+        if l.isEmpty || l.hasPrefix("#") { return }
+        body(l.components(separatedBy: "\t").map { $0.trimmingCharacters(in: .whitespaces) })
     }
-    return rows
 }
 
 func validSyllables(_ col: String) -> [String]? {
@@ -63,8 +81,8 @@ func validSyllables(_ col: String) -> [String]? {
 
 var charReadings: [String: [(reading: String, freq: Int64)]] = [:]
 var charRowCount = 0
-for cols in parseYaml(dictDir + "/8105.dict.yaml") {
-    guard cols.count >= 2, cols[0].count == 1, let syls = validSyllables(cols[1]), syls.count == 1 else { continue }
+forEachYamlRow(dictDir + "/8105.dict.yaml") { cols in
+    guard cols.count >= 2, cols[0].count == 1, let syls = validSyllables(cols[1]), syls.count == 1 else { return }
     let freq = cols.count >= 3 ? (Int64(cols[2]) ?? 100) : 100
     charReadings[cols[0], default: []].append((syls[0], freq))
     charRowCount += 1
@@ -73,7 +91,7 @@ var charMaxFreq: [String: Int64] = [:]
 for (ch, rs) in charReadings { charMaxFreq[ch] = rs.map(\.freq).max() ?? 0 }
 print("字表: \(charReadings.count) 字 / \(charRowCount) 读音行 (\(String(format: "%.1f", -t0.timeIntervalSinceNow))s)")
 
-// MARK: - 2) 自动注音(tencent 单列词库)
+// MARK: - 2) 自动注音(tencent / THUOCL / ali-words 等无拼音词库)
 
 /// 对无拼音词条生成 ≤4 组音节组合(beam,按各字字频乘积排序)
 func annotate(_ word: String) -> [[String]] {
@@ -121,48 +139,145 @@ var merged: [String: UInt32] = [:] // "key\x01word" -> max weight
 var syllables = Set<String>()
 var dupCount = 0
 
-func ingest(_ file: String, annotated: Bool) {
-    var kept = 0, skipped = 0
-    for cols in parseYaml(dictDir + "/" + file) {
-        guard !cols.isEmpty, !cols[0].isEmpty, cols[0].utf8.count <= 200 else { skipped += 1; continue }
-        let word = cols[0]
-        var sylsList: [[String]] = []
-        if annotated {
-            if let syls = validSyllables(cols.count >= 2 ? cols[1] : "") { sylsList = [syls] }
+func accept(_ word: String, _ sylsList: [[String]], _ weight: UInt32) {
+    for syls in sylsList {
+        let key = syls.joined(separator: " ")
+        guard !key.isEmpty, key.utf8.count <= 255 else { continue }
+        for s in syls { syllables.insert(s) }
+        let dedupKey = "\(key)\u{01}\(word)"
+        if let old = merged[dedupKey] {
+            dupCount += 1
+            merged[dedupKey] = max(old, weight)
         } else {
-            let list = annotate(word)
-            guard isCJK(word), !list.isEmpty else { skipped += 1; continue }
-            sylsList = list
-        }
-        guard !sylsList.isEmpty else { skipped += 1; continue }
-        let weight = cols.count >= 3 ? UInt32(clamping: Int64(cols[2]) ?? 100) : 100
-        for syls in sylsList {
-            let key = syls.joined(separator: " ")
-            guard !key.isEmpty, key.utf8.count <= 255 else { continue }
-            for s in syls { syllables.insert(s) }
-            let dedupKey = "\(key)\u{01}\(word)"
-            if let old = merged[dedupKey] {
-                dupCount += 1
-                merged[dedupKey] = max(old, weight)
-            } else {
-                merged[dedupKey] = weight
-            }
-            kept += 1
+            merged[dedupKey] = weight
         }
     }
-    print("\(file): 收录 \(kept) 跳过 \(skipped) (\(String(format: "%.1f", -t0.timeIntervalSinceNow))s)")
 }
 
-ingest("8105.dict.yaml", annotated: true)
-ingest("41448.dict.yaml", annotated: true)
-ingest("base.dict.yaml", annotated: true)
-ingest("ext.dict.yaml", annotated: true)
+struct Source {
+    enum Mode {
+        case rimeYaml      // 词\t拼音[\t权重]
+        case rimeYamlAuto  // 词[\t拼音[\t权重]],无拼音列时自动注音(tencent)
+        case apostropheTxt // 词\tq'y[\t权重],撇号/空格分隔音节;权重缺省或 0 → 100
+        case freqTSV       // 词\t频次 → 自动注音,权重 clamp 1...100_000
+        case wordList      // 提取引号内 CJK 词 → 自动注音,权重 100
+        case mdKeywords    // markdown 表第一列(梗合集):顿号拆分、去两端装饰、纯 CJK → 自动注音,权重 100
+    }
+    let path: String
+    let label: String
+    let mode: Mode
+}
+
+func ingest(_ src: Source) {
+    var kept = 0, skipped = 0
+    func bump(_ word: String, _ sylsList: [[String]], _ weight: UInt32) {
+        kept += sylsList.isEmpty ? 0 : 1
+        accept(word, sylsList, weight)
+    }
+
+    switch src.mode {
+    case .rimeYaml, .rimeYamlAuto:
+        let auto = (src.mode == .rimeYamlAuto)
+        forEachYamlRow(src.path) { cols in
+            guard !cols.isEmpty, !cols[0].isEmpty, cols[0].utf8.count <= 200 else { skipped += 1; return }
+            let word = cols[0]
+            if let syls = validSyllables(cols.count >= 2 ? cols[1] : "") {
+                let weight = cols.count >= 3 ? UInt32(clamping: Int64(cols[2]) ?? 100) : 100
+                bump(word, [syls], weight)
+            } else if auto, isCJK(word), word.count <= 12 {
+                bump(word, annotate(word), 100)
+            } else {
+                skipped += 1
+            }
+        }
+    case .apostropheTxt:
+        forEachLine(src.path) { line in
+            let l = line.trimmingCharacters(in: .whitespaces)
+            if l.isEmpty || l.hasPrefix("#") { return }
+            let cols = l.components(separatedBy: "\t").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard cols.count >= 2, !cols[0].isEmpty, cols[0].utf8.count <= 200 else { skipped += 1; return }
+            guard let syls = validSyllables(cols[1].replacingOccurrences(of: "'", with: " ")) else { skipped += 1; return }
+            var weight: UInt32 = 100
+            if cols.count >= 3, let v = UInt64(cols[2]), v > 0 { weight = UInt32(clamping: v) }
+            bump(cols[0], [syls], weight)
+        }
+    case .freqTSV:
+        forEachLine(src.path) { line in
+            let cols = line.components(separatedBy: "\t").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard cols.count >= 2, !cols[0].isEmpty, let freq = Int64(cols[1]), freq > 0 else { skipped += 1; return }
+            let word = cols[0]
+            guard isCJK(word), word.count >= 2, word.count <= 12 else { skipped += 1; return } // 单字 8105 已覆盖
+            let list = annotate(word)
+            guard !list.isEmpty else { skipped += 1; return }
+            bump(word, list, UInt32(clamping: min(freq, 100_000)))
+        }
+    case .wordList:
+        let quoted = try! NSRegularExpression(pattern: "\"([^\"]+)\"")
+        guard let raw = fm.contents(atPath: src.path),
+              let text = String(data: raw, encoding: .utf8) ?? String(data: raw, encoding: .utf16) else {
+            print("!! 无法读取 \(src.path)"); exit(1)
+        }
+        let ns = text as NSString
+        var seenWords = Set<String>()
+        for m in quoted.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let word = ns.substring(with: m.range(at: 1))
+            guard !seenWords.contains(word), isCJK(word), word.count >= 2, word.count <= 12 else { continue }
+            seenWords.insert(word)
+            let list = annotate(word)
+            guard !list.isEmpty else { skipped += 1; continue }
+            bump(word, list, 100)
+        }
+    case .mdKeywords:
+        forEachLine(src.path) { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            guard t.hasPrefix("|") else { return }
+            let cells = t.components(separatedBy: "|")
+            guard cells.count >= 2 else { return }
+            let cell = cells[1].trimmingCharacters(in: .whitespaces)
+            guard cell != "关键词", !cell.hasPrefix("-") else { return } // 表头/分隔行
+            for piece in cell.components(separatedBy: "、") {
+                var w = piece.trimmingCharacters(in: .whitespaces)
+                // 去两端非 CJK 装饰(⚡/emoji/引号等)
+                while let f = w.first, !isCJK(String(f)) { w.removeFirst() }
+                while let l = w.last, !isCJK(String(l)) { w.removeLast() }
+                guard isCJK(w), w.count >= 2, w.count <= 12 else { continue } // 拉丁/含占位符不可拼音键入,单字 8105 已覆盖
+                let list = annotate(w)
+                guard !list.isEmpty else { skipped += 1; continue }
+                bump(w, list, 100)
+            }
+        }
+    }
+    print("\(src.label): 收录 \(kept) 跳过 \(skipped) (\(String(format: "%.1f", -t0.timeIntervalSinceNow))s)")
+}
+
+// MARK: - 4) 主流程: rime-ice 主库 + 外部词库
+
+ingest(Source(path: dictDir + "/8105.dict.yaml", label: "8105.dict.yaml", mode: .rimeYaml))
+ingest(Source(path: dictDir + "/41448.dict.yaml", label: "41448.dict.yaml", mode: .rimeYaml))
+ingest(Source(path: dictDir + "/base.dict.yaml", label: "base.dict.yaml", mode: .rimeYaml))
+ingest(Source(path: dictDir + "/ext.dict.yaml", label: "ext.dict.yaml", mode: .rimeYaml))
 print("tencent 注音中…")
-ingest("tencent.dict.yaml", annotated: false)
+ingest(Source(path: dictDir + "/tencent.dict.yaml", label: "tencent.dict.yaml", mode: .rimeYamlAuto))
+
+for f in repeatedArgs("--rime") {
+    ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .rimeYaml))
+}
+for f in repeatedArgs("--apostrophe") {
+    ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .apostropheTxt))
+}
+for f in repeatedArgs("--freq") {
+    ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .freqTSV))
+}
+for f in repeatedArgs("--wordlist") {
+    ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .wordList))
+}
+for f in repeatedArgs("--md-keywords") {
+    ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .mdKeywords))
+}
 
 print("合并去重后: \(merged.count) 条 / 重复 \(dupCount) / 峰值内存 \(String(format: "%.0f", getRSSMB()))MB (\(String(format: "%.1f", -t0.timeIntervalSinceNow))s)")
 
-// MARK: - 4) 排序 + 写文件
+// MARK: - 5) 排序 + 写文件
 
 var entries: [Entry] = merged.map { kv in
     let parts = kv.key.split(separator: "\u{01}", maxSplits: 1, omittingEmptySubsequences: false)

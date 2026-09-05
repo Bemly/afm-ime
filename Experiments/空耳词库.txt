@@ -1,0 +1,16 @@
+# 空耳/日语梗词库(手工标注拼音,格式: 词\tq'y\t权重)
+# 收录原则: 按用户提供的词形;拉丁混排词(如 saki酱)用全拼键位;同词异读可多行
+撒西不理	sa'xi'bu'li	100
+哦哈哟	o'ha'yo	100
+亚麻跌	ya'ma'die	100
+雅美咯	ya'mei'luo	100
+雅美咯	ya'ma'luo	100
+哦齁齁齁齁	o'hou'hou'hou'hou	100
+一休尼	yi'xiu'ni	100
+欧尼该	ou'ni'gai	100
+瓦达西	wa'da'xi	100
+saki酱	sa'ki'jiang	100
+可喜可贺	ke'xi'ke'he	100
+哦咩跌多	o'mie'die'duo	100
+咩跌它西	mie'die'ta'xi	100
+真得控制你了	zhen'de'kong'zhi'ni'le	100

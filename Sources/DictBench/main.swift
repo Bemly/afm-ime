@@ -19,6 +19,25 @@ let queries = [
     "ceshijieguo",                        // 4 字词组
     "ni", "z",                            // 短前缀(最坏情况)
     "jint",                               // 尾音节不完整
+    // 外部词库回归(2026-09 外部词库接入): minecraft/BA/THUOCL/ali-words
+    "kulipa",                             // mcwiki 苦力怕
+    "xiajiehejin",                        // mcwiki 下界合金
+    "fumo",                               // mcwiki 附魔
+    "weilandangan",                       // 蔚蓝档案(BA)
+    "qinghuishi",                         // 青辉石(BA)
+    "zifuchuan",                          // THUOCL 字符串
+    "huashetianzu",                       // THUOCL 成语
+    "funeng",                             // ali-words 赋能
+    "zundujiadu",                         // 梗合集 尊嘟假嘟
+    "taikula",                            // 梗合集 泰裤辣
+    "caijiuduolian",                      // 梗合集 菜就多练
+    "hongwen",                            // 梗合集 红温
+    "malou",                              // 梗合集 吗喽
+    "saxibuli",                           // 空耳词库 撒西不理(sa xi bu li)
+    "yamadie",                            // 空耳词库 亚麻跌
+    "zongguo",                            // 模糊音 zh→z: 应出 中国(排在精确 zong 词之后)
+    "sibie",                              // 模糊音 sh→s: 应出 识别
+    "shen",                               // 模糊音 双向: 深/身 在前,生/声(×0.5)在后
 ]
 for q in queries {
     let tq = Date()
