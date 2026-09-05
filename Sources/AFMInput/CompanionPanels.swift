@@ -30,6 +30,8 @@ enum CompanionPanels {
     }
 
     static func toggleTranslate() {
+        // 翻译框组件暂不启用:⌃F 已改为候选内联翻译(InputController.enterTranslationMode),
+        // 面板代码保留备用;若复用需在 handle ⌃F 分支恢复 suspendCompositionForPanel + 本调用
         if translate.isVisible { translate.close(); return }
         translate.open(caret: InputController.latestCaret, candidateFrame: InputController.latestCandidateFrame)
     }
