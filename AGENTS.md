@@ -145,6 +145,8 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - 坑①: macOS `security` 不认 OpenSSL 3 默认 PKCS12 加密(MAC verification failed)→ 改 PEM 分开导入;坑②: CN 含中文在 keychain 里乱码导致 codesign 匹配失败(unknown exception)→ 证书名用纯 ASCII;坑③: codesign 首次用钥私钥会弹钥匙串授权框,需输开机密码点允许
 - package.sh 自动检测证书,缺失回退 ad-hoc;证书重建(换机/丢 keychain)会变 DR,需重新授权输入监控
 - 授权入口: 系统设置 → 隐私与安全性 → 输入监控 → 添加 AFM拼音
+- **陈旧 TCC 记录陷阱(2026-09-05 实测,最后一块拼图)**:签名变更后,输入监控面板里旧授权条目**依然显示"已开启"但内部 csreq 指向死掉的旧 cdhash**,校验永远静默失败;在面板里开关勾选**不会刷新 csreq**。唯一解法:`tccutil reset ListenEvent moe.bemly.inputmethod.AfmIME` 清掉记录 → 重启输入法(tap 必须在授权之后创建,授权前创建的 tap 永远失明)→ 系统重新弹「想要监听键盘输入」框 → 点允许 → csreq 以当前证书签名记录。之后跨构建永久有效(真机验证 2026-09-05)
+- 排障口诀(Shift tap 失效时按序查): ①日志有无 `ShiftTap: shift 按下`(区分"事件没到"还是"判定没切") ②`codesign -dr` 看 DR 是否证书绑定 ③输入监控面板有条目≠授权有效,csreq 才是真身 ④tccutil reset + 重启 + 重新弹框授权
 
 ## 启用状态管理(M2 实测补充)
 
