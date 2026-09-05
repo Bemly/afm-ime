@@ -48,6 +48,7 @@ let queries = [
     "nhao",                               // 简拼混输: n+hao → 你好
     "nishiyizhimaoniang",                 // 整句组词: 你是一只猫娘(词格DP,非作弊词)
     "nishiyizhiwanjuxiong",               // 整句组词: 你是一只玩具熊
+    "meibengzhu",                         // 覆盖分档: 没绷住(ext 权重100)须 #1,压过渐进前缀单字(没 756万×0.01=7.5万)
 ]
 for q in queries {
     let tq = Date()

@@ -15,11 +15,16 @@ public final class CandidateEngine {
         public var text: String
         public var pinyin: String
         public var score: Double
+        /// 是否覆盖整个输入(全键精确/延伸/模糊/缩写/整句组词)=true;渐进前缀词=false。
+        /// 排序先按此档再按分数——词典权重横跨 7 个数量级(ext 梗词 100 vs 高频单字 756 万),
+        /// 乘法层级因子(0.1^层)压不住,没绷住(100)会被 没(756万×0.01=7.5万)压到十名开外
+        public var coversInput: Bool
 
-        public init(text: String, pinyin: String, score: Double) {
+        public init(text: String, pinyin: String, score: Double, coversInput: Bool = true) {
             self.text = text
             self.pinyin = pinyin
             self.score = score
+            self.coversInput = coversInput
         }
     }
 
@@ -39,6 +44,17 @@ public final class CandidateEngine {
 
         let segs = segmenter.segment(rawInput)
         var primaryFullExact = false // 主路径完整键在词库有整句短语 → 不做词格组句
+        // 去重: 同档比分数;全覆盖候选永远压过同词的部分覆盖条目
+        func upsert(_ nc: Candidate) {
+            if let old = best[nc.text] {
+                if old.coversInput == nc.coversInput {
+                    guard old.score < nc.score else { return }
+                } else if old.coversInput {
+                    return
+                }
+            }
+            best[nc.text] = nc
+        }
         for (si, seg) in segs.enumerated() {
             let key = seg.syllables.joined(separator: " ")
             let keyFactor = seg.trailingPartial ? 0.45 : 1.0
@@ -87,8 +103,7 @@ public final class CandidateEngine {
                     if si == 0, q.factor == 1.0, hit.key == key { foundExactMain = true }
                     let isExact = hit.key == q.key
                     let score = Double(hit.weight) * (isExact ? 1.0 : 0.6) * keyFactor * q.factor
-                    if let old = best[hit.word], old.score >= score { continue }
-                    best[hit.word] = Candidate(text: hit.word, pinyin: hit.key, score: score)
+                    upsert(Candidate(text: hit.word, pinyin: hit.key, score: score))
                 }
             }
             if si == 0, foundExactMain { primaryFullExact = true }
@@ -104,8 +119,7 @@ public final class CandidateEngine {
                     for hit in store.query(prefix: pk, exactCap: 12, extCap: 2, scanBudget: 5_000) {
                         guard hit.key == pk else { continue } // 只要完整覆盖前缀的词
                         let score = Double(hit.weight) * pow(0.1, Double(drop))
-                        if let old = best[hit.word], old.score >= score { continue }
-                        best[hit.word] = Candidate(text: hit.word, pinyin: hit.key, score: score)
+                        upsert(Candidate(text: hit.word, pinyin: hit.key, score: score, coversInput: false))
                     }
                 }
             }
@@ -115,15 +129,18 @@ public final class CandidateEngine {
         if !primaryFullExact, let seg0 = segs.first, !seg0.abbrevFlags.contains(true),
            seg0.syllables.count >= 2, seg0.syllables.count <= 12,
            let sent = composeSentence(syllables: seg0.syllables) {
-            if let old = best[sent.text], old.score >= sent.score {
-                // 已有同文候选(如词典整句)保持
+            if let old = best[sent.text], old.coversInput, old.score >= sent.score {
+                // 已有同文全覆盖候选(如词典整句)保持
             } else {
                 best[sent.text] = sent
             }
         }
         var ranked = Array(best.values)
-        for i in ranked.indices { ranked[i].score *= UserFreq.shared.boost(ranked[i].text) } // 用户词频: 选用越多越靠前
-        let out = Array(ranked.sorted { $0.score > $1.score }.prefix(limit))
+        for i in ranked.indices { ranked[i].score *= UserFreq.shared.boost(ranked[i].text) } // 用户词频: 档内选用越多越靠前
+        // 覆盖分档优先于分数: 全键候选(哪怕 ext 梗词权重 100)永远排在渐进前缀词(高频单字 756 万 × 0.01)之前
+        let out = Array(ranked.sorted { a, b in
+            a.coversInput != b.coversInput ? a.coversInput : a.score > b.score
+        }.prefix(limit))
         DebugLog.log("引擎[\(rawInput)] 切分=\(segs.map { $0.syllables.joined(separator: "'") }.joined(separator: " / ")) → \(out.count) 条"
             + (fuzzyVariants.isEmpty ? "" : " 模糊=\(fuzzyVariants.joined(separator: ","))")
             + ", \(String(format: "%.2f", -t0.timeIntervalSinceNow * 1000))ms")
