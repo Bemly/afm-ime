@@ -18,7 +18,8 @@ else
 fi
 
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
-codesign --force --sign - --deep "$APP"
+# 注意: 不做任何重签——package.sh 已用 AFM-IME-Dev 证书签名(重签 ad-hoc 会变 DR,
+# TCC「输入监控」授权随 cdhash 失效,Shift tap 静默失明,见 AGENTS.md 代码签名一节)
 
 "$APP/Contents/MacOS/AFMInput" --quit 2>/dev/null || true
 "$APP/Contents/MacOS/AFMInput" --register-input-source
