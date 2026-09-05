@@ -121,7 +121,9 @@ public final class CandidateEngine {
                 best[sent.text] = sent
             }
         }
-        let out = Array(best.values.sorted { $0.score > $1.score }.prefix(limit))
+        var ranked = Array(best.values)
+        for i in ranked.indices { ranked[i].score *= UserFreq.shared.boost(ranked[i].text) } // 用户词频: 选用越多越靠前
+        let out = Array(ranked.sorted { $0.score > $1.score }.prefix(limit))
         DebugLog.log("引擎[\(rawInput)] 切分=\(segs.map { $0.syllables.joined(separator: "'") }.joined(separator: " / ")) → \(out.count) 条"
             + (fuzzyVariants.isEmpty ? "" : " 模糊=\(fuzzyVariants.joined(separator: ","))")
             + ", \(String(format: "%.2f", -t0.timeIntervalSinceNow * 1000))ms")

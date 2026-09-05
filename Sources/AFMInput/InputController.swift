@@ -402,6 +402,7 @@ final class InputController: IMKInputController {
         if !concat.isEmpty, raw.hasPrefix(concat), concat.count < raw.count {
             let remainder = String(raw.dropFirst(concat.count))
             DebugLog.log("分段转换 '\(cand.text)' → 余 '\(remainder)'")
+            UserFreq.shared.record(cand.text) // 用户词频: 选用即计数
             committedBuffer += cand.text
             undoStack.append(UndoEntry(segmentText: cand.text, previousRaw: raw, remainderRaw: remainder))
             raw = remainder
@@ -410,6 +411,7 @@ final class InputController: IMKInputController {
             refresh(client)
             return
         }
+        UserFreq.shared.record(cand.text) // 用户词频: 选用即计数
         flush(cand.text, client: client)
     }
 
