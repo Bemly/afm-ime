@@ -21,3 +21,5 @@ nya	nia	100
 ↩	hui'che'jian	80
 ⌫	shan'chu'jian	80
 ⎋	tui'chu'jian	80
+啊我死了	a'wo'si'le	100
+阿伟死了	a'wei'si'le	100

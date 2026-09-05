@@ -11,7 +11,7 @@ CACHE = "vendor/emoji/cldr-zh-annotations.json"
 OUT = "vendor/emoji/emoji-zh.txt"
 URL = ("https://raw.githubusercontent.com/unicode-org/cldr-json/main/"
        "cldr-json/cldr-annotations-full/annotations/zh/annotations.json")
-WEIGHT = 60          # emoji 权重压低,不与正常词条竞争
+WEIGHT = 2000        # emoji 权重: 低于高频词但高于长尾,保证在热门键的 32 条截断线内可见
 MAX_KEYS = 4         # 每个 emoji 最多的拼音键数(名称 + 前 3 个关键词)
 
 

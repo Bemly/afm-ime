@@ -40,8 +40,11 @@ let queries = [
     "shen",                               // 模糊音 双向: 深/身 在前,生/声(×0.5)在后
     "zhuaba",                             // 热词 爪巴
     "pingguo",                            // 符号 苹果标志
-    "xiaolian",                           // 符号 ☻
+    "xiaolian",                           // 符号 ☻ + 😀(emoji 2000)
     "gun",                                // 符号 丨(与 滚 同键,权重排序)
+    "shoubiao",                           // emoji ⌚
+    "awsl",                               // 简拼: 啊我死了/阿伟死了
+    "nh",                                 // 简拼: 你好
 ]
 for q in queries {
     let tq = Date()

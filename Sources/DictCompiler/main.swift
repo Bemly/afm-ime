@@ -144,13 +144,22 @@ func accept(_ word: String, _ sylsList: [[String]], _ weight: UInt32) {
         let key = syls.joined(separator: " ")
         guard !key.isEmpty, key.utf8.count <= 255 else { continue }
         for s in syls { syllables.insert(s) }
-        let dedupKey = "\(key)\u{01}\(word)"
-        if let old = merged[dedupKey] {
-            dupCount += 1
-            merged[dedupKey] = max(old, weight)
-        } else {
-            merged[dedupKey] = weight
+        merge("\(key)\u{01}\(word)", weight)
+        // 简拼键: 各音节首字母连接(rime abbrev 等价,n→你、awsl→啊我死了);
+        // 只进 merged,不进 syllables 表(首字母非真音节,会污染切分器)
+        let initials = syls.map { String($0.prefix(1)) }.joined()
+        if initials != key {
+            merge("\(initials)\u{01}\(word)", weight)
         }
+    }
+}
+
+func merge(_ dedupKey: String, _ weight: UInt32) {
+    if let old = merged[dedupKey] {
+        dupCount += 1
+        merged[dedupKey] = max(old, weight)
+    } else {
+        merged[dedupKey] = weight
     }
 }
 

@@ -25,14 +25,19 @@ public final class CandidateEngine {
 
     public func candidates(for rawInput: String, limit: Int = 20) -> [Candidate] {
         let t0 = Date()
-        let segs = segmenter.segment(rawInput)
-        guard !segs.isEmpty else {
-            DebugLog.log("引擎[\(rawInput)] 无合法切分")
-            return []
-        }
-
         var best: [String: Candidate] = [:]
         var fuzzyVariants: [String] = []
+
+        // 简拼: 整串字母作为首字母缩写键直查(awsl→啊我死了/阿伟死了,n→你),与音节切分互补;
+        // 缩写键由编译期派生(rime abbrev 等价),只取 key 恰好等于输入串的记录
+        for hit in store.query(prefix: rawInput, exactCap: 24, extCap: 8, scanBudget: 20_000) {
+            guard hit.key == rawInput else { break }
+            let score = Double(hit.weight)
+            if let old = best[hit.word], old.score >= score { continue }
+            best[hit.word] = Candidate(text: hit.word, pinyin: hit.key, score: score)
+        }
+
+        let segs = segmenter.segment(rawInput)
         for (si, seg) in segs.enumerated() {
             let key = seg.syllables.joined(separator: " ")
             let keyFactor = seg.trailingPartial ? 0.45 : 1.0

@@ -28,12 +28,12 @@ final class InputController: IMKInputController {
 
     static let liveControllers = NSHashTable<InputController>.weakObjects()
 
-    /// ShiftModeMonitor(主线程)调用:组词中的实例先上屏拼音原文,再切模式
+    /// ShiftModeMonitor(主线程)调用:组词中的实例先上屏拼音原文(↩ 行为,非空格选词),再切模式
     static func shiftTappedToggle() {
         for c in liveControllers.allObjects {
             if !c.raw.isEmpty {
-                DebugLog.log("Shift 切换 → 先上屏组词原文 '\(c.raw)'")
-                c.commitComposition(c.client())
+                DebugLog.log("Shift 切换 → 先上屏拼音原文 '\(c.raw)'")
+                c.commit(c.raw, client: c.client())
             }
             c.quoteOpenSingle = false
             c.quoteOpenDouble = false
@@ -108,10 +108,10 @@ final class InputController: IMKInputController {
         // 方向键 keyDown 自带 function|numericPad 修饰位(0xA00000),须剔除后再判定,
         // 否则 ←/→/↑/↓ 全被当成"带修饰键"放行给应用(光标移动而非切换候选)
         let meaningful = mods.intersection([.shift, .control, .option, .command, .capsLock])
-        // ⌥;(keyCode 39): 打开系统「显示表情与符号」字符检阅器
-        if event.keyCode == 39, mods.contains(.option),
-           !mods.contains(.command), !mods.contains(.control) {
-            DebugLog.log("快捷键 ⌥; → 打开表情与符号")
+        // ⌃;(keyCode 39): 打开系统「显示表情与符号」字符检阅器
+        if event.keyCode == 39, mods.contains(.control),
+           !mods.contains(.option), !mods.contains(.command) {
+            DebugLog.log("快捷键 ⌃; → 打开表情与符号")
             NSApp.orderFrontCharacterPalette(nil)
             return true
         }
