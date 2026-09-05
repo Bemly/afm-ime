@@ -17,7 +17,7 @@ final class InputController: IMKInputController {
         return CandidateEngine(store: store)
     }()
 
-    static let perPage = 9
+    static let perPage = 8
 
     // MARK: - 中英模式(系统级 ShiftTap 轻点切换,UserDefaults 跨重启记忆)
 
@@ -241,11 +241,11 @@ final class InputController: IMKInputController {
             flush(raw, client: client)
             return true
 
-        case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 数字选词: 候选条=窗口内位次,网格=全局 1-9(shift+数字=符号,不选词)
-            let idx = gridExpanded ? Int(effScalar.value) - 49
-                                   : barWindowStart + Int(effScalar.value) - 49
-            if idx >= 0, idx < candidates.count {
-                DebugLog.log("数字 \(Int(scalar.value) - 48) → 上屏 idx=\(idx)")
+        case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 数字选词: 候选条=窗口内位次(一行 8 个,9 无效),网格=全局 1-9(shift+数字=符号,不选词)
+            let d = Int(effScalar.value) - 49
+            let idx = gridExpanded ? d : barWindowStart + d
+            if d < (gridExpanded ? 9 : Self.perPage), idx >= 0, idx < candidates.count {
+                DebugLog.log("数字 \(d + 1) → 上屏 idx=\(idx)")
                 commitCandidate(at: idx, client: client)
                 return true
             }
