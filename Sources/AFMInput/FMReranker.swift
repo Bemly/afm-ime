@@ -88,6 +88,33 @@ final class FMReranker {
         return Double(cjk) >= Double(s.unicodeScalars.count) * 0.5
     }
 
+    /// FM 翻译(⌃F 面板): 含中文 → 译英,否则 → 译中;失败/不可用静默 nil
+    func translate(_ text: String) async -> String? {
+        guard available, !text.isEmpty else {
+            DebugLog.log("FM 翻译跳过: available=\(available)")
+            return nil
+        }
+        let toEnglish = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+        let instructions = toEnglish
+            ? "你是翻译引擎。把用户输入的中文翻译成地道的英文。只输出译文,不要解释、不要加引号。"
+            : "你是翻译引擎。把用户输入的外文翻译成通顺的简体中文。只输出译文,不要解释、不要加引号。"
+        guard #available(macOS 26.0, *) else { return nil }
+        let t0 = Date()
+        do {
+            let session = LanguageModelSession(
+                model: SystemLanguageModel.default,
+                instructions: instructions)
+            let resp = try await session.respond(to: text)
+            let out = resp.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            DebugLog.log("FM 翻译响应(\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms, \(toEnglish ? "中→英" : "→中")): '\(out.prefix(40))'")
+            guard !out.isEmpty, out != text else { return nil }
+            return out
+        } catch {
+            DebugLog.error("FM 翻译失败: \(error) (耗时\(String(format: "%.0f", -t0.timeIntervalSinceNow * 1000))ms)")
+            return nil
+        }
+    }
+
     static func firstIndex(in text: String, upperBound: Int) -> Int? {
         var digits = ""
         for ch in text {

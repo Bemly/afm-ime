@@ -28,6 +28,14 @@ final class InputController: IMKInputController {
 
     static let liveControllers = NSHashTable<InputController>.weakObjects()
 
+    // MARK: - 伴随面板(⌃V 剪贴板 / ⌃F 翻译)共享状态
+
+    /// 伴随面板定位用: 最近一次光标矩形与候选窗 frame(onFrameChange 回写)
+    static var latestCaret: NSRect = .null
+    static var latestCandidateFrame: NSRect = .null
+    /// 最近活跃的 controller(剪贴板/翻译"插入到光标"的目标客户)
+    static weak var lastActive: InputController?
+
     /// ShiftModeMonitor(主线程)调用:组词中的实例先上屏拼音原文(↩ 行为,非空格选词),再切模式
     static func shiftTappedToggle() {
         for c in liveControllers.allObjects {
@@ -70,11 +78,17 @@ final class InputController: IMKInputController {
     override init(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
         Self.liveControllers.add(self)
+        Self.lastActive = self
+        candidateWindow.onFrameChange = { frame in
+            Self.latestCandidateFrame = frame ?? .null
+            CompanionPanels.repositionAll()
+        }
         DebugLog.log("InputController 初始化 client=\(client != nil)")
     }
 
     override func activateServer(_ sender: Any!) {
         DebugLog.log("activateServer")
+        Self.lastActive = self
         ShiftModeMonitor.retryIfNeeded() // 权限补授后无需重启,焦点切换时重试创建监听
     }
 
@@ -116,6 +130,7 @@ final class InputController: IMKInputController {
             DebugLog.log("忽略非按键事件 type=\(event.type)")
             return false
         }
+        Self.lastActive = self
 
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         // 方向键 keyDown 自带 function|numericPad 修饰位(0xA00000),须剔除后再判定,
@@ -126,6 +141,15 @@ final class InputController: IMKInputController {
            !mods.contains(.option), !mods.contains(.command) {
             DebugLog.log("快捷键 ⌃; → 打开表情与符号")
             NSApp.orderFrontCharacterPalette(nil)
+            return true
+        }
+        // 伴随面板 ⌃V 剪贴板 / ⌃F 翻译(中英模式都可用;自己的面板持键时放行,如翻译框内输入)
+        if !CompanionPanels.anyKeyWindow, mods.contains(.control),
+           !mods.contains(.option), !mods.contains(.command), !mods.contains(.shift),
+           event.keyCode == 9 || event.keyCode == 3 {
+            Self.latestCaret = Self.caretRect(client)
+            DebugLog.log("⌃\(event.keyCode == 9 ? "V → 剪贴板" : "F → 翻译")面板")
+            if event.keyCode == 9 { CompanionPanels.toggleClipboard() } else { CompanionPanels.toggleTranslate() }
             return true
         }
         // Shift 组合键的"轻点"判定在 ShiftModeMonitor(系统级)完成
@@ -344,6 +368,26 @@ final class InputController: IMKInputController {
         }
     }
 
+    /// 伴随面板(剪贴板条目/翻译结果)"插入到光标": 组词中先按空格语义上屏首选,再写入客户光标处
+    /// (面板 close 还焦点后延迟调用,目标客户重新活跃后 IMK insertText 才可靠)
+    static func insertFromPanel(_ text: String) {
+        guard let c = lastActive, let client = c.client() else {
+            DebugLog.error("insertFromPanel: 无活跃 client")
+            return
+        }
+        if !c.raw.isEmpty {
+            DebugLog.log("面板插入前先上屏首选 '\(c.candidates.first?.text ?? c.raw)'")
+            c.flush(c.candidates.first?.text ?? c.raw, client: client)
+        }
+        guard let textInput = client as? IMKTextInput else {
+            DebugLog.error("insertFromPanel: client 不符合 IMKTextInput")
+            return
+        }
+        DebugLog.log("面板插入 长度=\(text.count)")
+        textInput.insertText(NSAttributedString(string: text),
+                             replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
+    }
+
     private func pageItems() -> [CandidateItem] {
         let start = page * Self.perPage
         let end = min(start + Self.perPage, candidates.count)
@@ -356,6 +400,7 @@ final class InputController: IMKInputController {
         if candidates.isEmpty {
             guard loading else { candidateWindow.hide(); return }
             let caret = Self.caretRect(client)
+            Self.latestCaret = caret
             DebugLog.log("候选窗占位(FM 整句中) caret=\(NSStringFromRect(caret))")
             candidateWindow.show(
                 items: [], selectedIndex: 0, hasMorePages: false, canPrevPage: false,
@@ -363,6 +408,7 @@ final class InputController: IMKInputController {
             return
         }
         let caret = Self.caretRect(client)
+        Self.latestCaret = caret
         DebugLog.log("候选窗定位 caret=\(NSStringFromRect(caret)) 选中=\(selectedIndex) 页=\(page)")
         candidateWindow.show(
             items: pageItems(),

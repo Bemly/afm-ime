@@ -93,6 +93,10 @@ final class CandidateWindowController {
     private var onSelect: (Int) -> Void = { _ in }
     private var onPage: (Int) -> Void = { _ in }
 
+    /// 候选窗 frame 变化回调(nil = 隐藏);伴随面板(剪贴板/翻译)据此重新浮动定位
+    var onFrameChange: ((NSRect?) -> Void)?
+    var currentFrame: NSRect { panel?.frame ?? NSRect.null }
+
     var isVisible: Bool { panel?.isVisible ?? false }
 
     private func ensurePanel() -> NSPanel {
@@ -169,10 +173,12 @@ final class CandidateWindowController {
         }
         panel.setFrameOrigin(origin)
         panel.orderFront(nil)
+        onFrameChange?(panel.frame)
         DebugLog.log("候选窗显示 size=\(NSStringFromSize(size)) origin=\(NSStringFromPoint(origin)) caret=\(NSStringFromRect(caretRect))")
     }
 
     func hide() {
         panel?.orderOut(nil)
+        onFrameChange?(nil)
     }
 }
