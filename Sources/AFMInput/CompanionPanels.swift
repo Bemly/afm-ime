@@ -3,10 +3,14 @@ import SwiftUI
 import IMECore
 
 // 伴随面板(⌃V 剪贴板 / ⌃F 翻译): 液态玻璃,候选条在 → 浮其下方(放不下 → 上方),
-// 候选条不在 → 光标所在屏幕右上角。两者互斥,打开一个自动关另一个。
-// 焦点模型: IME 进程平时 .prohibited 收不到键盘事件,面板需要键(数字选词/翻译输入),
-// 打开时临时切 .accessory 激活,关闭时恢复 .prohibited 并 deactivate 把焦点还给原应用;
-// 插入文本也在面板 close 还焦点后延迟执行(目标客户重新活跃后 IMK insertText 才可靠)。
+// 候选条不在 → 光标所在屏幕右上角。两面板可并存:剪贴板贴候选条左缘、翻译贴右缘,重叠时翻译挪到剪贴板右侧。
+// 焦点模型(踩坑修正,详见 AGENTS.md):
+//  - 剪贴板面板【免激活】:canBecomeKey=false 的纯展示面板,本进程保持 .prohibited 不抢焦点,
+//    客户端焦点/组词/候选条原样存活,打字可继续;键盘选词由 InputController.handle 路由(组词中按键归组词,面板用点击)。
+//  - 翻译面板需要键盘,必须临时 .accessory 激活;组词中打开 → InputController.suspendCompositionForPanel
+//    挂起(deactivateServer 跳过提交),关闭还焦点后 activateServer 原样恢复预编辑态与候选条。
+//  - 面板激活后自有 app 的事件仍回流 IMK handle(实测)→ handle 顶部 anyKeyWindow 全放行,
+//    翻译框才能收到原始按键(此前字母被拼音引擎吞掉,表现为「翻译框无法输入」)。
 
 // MARK: - 管理与定位
 
@@ -22,13 +26,11 @@ enum CompanionPanels {
 
     static func toggleClipboard() {
         if clipboard.isVisible { clipboard.close(); return }
-        translate.close()
         clipboard.open(caret: InputController.latestCaret, candidateFrame: InputController.latestCandidateFrame)
     }
 
     static func toggleTranslate() {
         if translate.isVisible { translate.close(); return }
-        clipboard.close()
         translate.open(caret: InputController.latestCaret, candidateFrame: InputController.latestCandidateFrame)
     }
 
@@ -38,14 +40,29 @@ enum CompanionPanels {
         let cand = InputController.latestCandidateFrame
         clipboard.reposition(caret: caret, candidateFrame: cand)
         translate.reposition(caret: caret, candidateFrame: cand)
+        resolveOverlap()
     }
 
-    /// 通用定位: 候选条下方,放不下 → 上方;无候选条 → 光标所在屏幕右上角
-    static func origin(size: NSSize, caret: NSRect, candidateFrame: NSRect) -> NSPoint {
+    /// 双面板并存防重叠: 翻译面板移到剪贴板右侧,右侧放不下 → 剪贴板下方
+    static func resolveOverlap() {
+        guard clipboard.isVisible, translate.isVisible,
+              let cb = clipboard.panel?.frame, let tr = translate.panel?.frame, cb.intersects(tr) else { return }
+        let screen = NSScreen.screens.first { $0.frame.intersects(cb) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? cb
+        var p = NSPoint(x: cb.maxX + 8, y: min(tr.minY, cb.minY))
+        if p.x + tr.width > visible.maxX - 4 { p = NSPoint(x: cb.minX, y: cb.minY - tr.height - 8) }
+        p.x = min(max(p.x, visible.minX + 4), visible.maxX - tr.width - 4)
+        p.y = min(max(p.y, visible.minY + 4), visible.maxY - tr.height - 4)
+        translate.panel?.setFrameOrigin(p)
+    }
+
+    /// 通用定位: 候选条下方(剪贴板贴左缘/翻译贴右缘),放不下 → 上方;无候选条 → 光标所在屏幕右上角
+    static func origin(size: NSSize, caret: NSRect, candidateFrame: NSRect, side: PanelSide) -> NSPoint {
         let screen = NSScreen.screens.first { $0.frame.intersects(caret) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         if !candidateFrame.isNull, candidateFrame.width > 0 {
-            var p = NSPoint(x: candidateFrame.minX, y: candidateFrame.minY - size.height - 8)
+            let x0 = side == .left ? candidateFrame.minX : candidateFrame.maxX - size.width
+            var p = NSPoint(x: x0, y: candidateFrame.minY - size.height - 8)
             if p.y < visible.minY + 4 { p.y = candidateFrame.maxY + 8 } // 下方没空间 → 上方
             p.y = min(p.y, visible.maxY - size.height - 4)
             p.x = min(max(p.x, visible.minX + 4), max(visible.minX + 4, visible.maxX - size.width - 4))
@@ -55,14 +72,15 @@ enum CompanionPanels {
     }
 }
 
-// MARK: - 焦点切换(面板生命周期内临时激活本进程)
+enum PanelSide { case left, right }
+
+// MARK: - 焦点切换(仅翻译面板用;面板生命周期内临时激活本进程)
 
 enum PanelFocus {
     static func activate(_ panel: NSPanel) {
         NSApp.setActivationPolicy(.accessory)
         NSApp.activate(ignoringOtherApps: true)
-        panel.orderFront(nil)
-        panel.makeKey()
+        panel.makeKeyAndOrderFront(nil)
     }
 
     static func restore(_ panel: NSPanel) {
@@ -180,7 +198,7 @@ struct ClipboardBarView: View {
                     .onTapGesture { model.onPick?(text) }
                 }
             }
-            Text("点击或 1-9/⏎ 插入 · ↑↓ 选择 · Esc 关闭")
+            Text("点击或 1-9/⏎ 插入 · ↑↓ 选择 · Esc/⌃V 关闭 · 组词中请用点击")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .padding(.horizontal, 12).padding(.top, 3).padding(.bottom, 4)
         }
@@ -189,11 +207,15 @@ struct ClipboardBarView: View {
     }
 }
 
+/// 永不持键的面板(剪贴板用): 点击可用,但绝不成为 keyWindow——客户端焦点与组词不受任何影响
+final class NonKeyPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+}
+
 final class ClipboardPanelController {
     private(set) var panel: NSPanel?
     private var hosting: NSHostingView<ClipboardBarView>?
-    private var keyMonitor: Any?
-    private var resignObserver: NSObjectProtocol?
+    private var clickMonitor: Any?
     let model = ClipboardModel()
 
     var isVisible: Bool { panel?.isVisible ?? false }
@@ -201,33 +223,53 @@ final class ClipboardPanelController {
     func open(caret: NSRect, candidateFrame: NSRect) {
         let panel = ensurePanel()
         model.reload(from: ClipboardMonitor.shared.items)
-        model.onPick = { [weak self] text in
-            self?.close() // 先还焦点,再插入到原应用光标处
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                InputController.insertFromPanel(text)
-            }
-        }
+        model.onPick = { [weak self] text in self?.pick(text) }
         reposition(caret: caret, candidateFrame: candidateFrame)
-        PanelFocus.activate(panel)
-        installMonitors()
+        panel.orderFront(nil) // 免激活: 不抢焦点,组词/候选条/打字全部原样存活
+        installClickOutsideMonitor()
     }
 
     func close() {
         guard panel != nil else { return }
-        tearDownMonitors()
-        PanelFocus.restore(panel!)
+        removeClickOutsideMonitor()
+        panel?.orderOut(nil) // 从未激活,无需还焦点/改激活策略
+    }
+
+    /// 选中插入(点击/键盘共用): 组词中先按空格语义上屏首选再插入(客户端仍持焦点,立即执行)
+    func pick(_ text: String) {
+        close()
+        InputController.insertFromPanel(text)
+    }
+
+    /// 键盘路由(InputController.handle 在客户端持焦点时调用,仅非组词中): 返回 true = 已消费
+    func routeKey(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 53: close(); return true          // Esc 关闭
+        case 125: model.move(1); return true   // ↓
+        case 126: model.move(-1); return true  // ↑
+        case 36:                               // ⏎ 插入高亮项
+            if let t = model.pickSelected() { pick(t) }
+            return true
+        default:
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard mods.subtracting(.capsLock).isEmpty,
+                  let c = event.charactersIgnoringModifiers?.first?.wholeNumberValue,
+                  (1...9).contains(c), let t = model.pick(c - 1) else { return false }
+            pick(t)
+            return true
+        }
     }
 
     func reposition(caret: NSRect, candidateFrame: NSRect) {
         guard let panel, panel.isVisible, let hosting else { return }
         let size = hosting.fittingSize
         panel.setContentSize(size)
-        panel.setFrameOrigin(CompanionPanels.origin(size: size, caret: caret, candidateFrame: candidateFrame))
+        panel.setFrameOrigin(CompanionPanels.origin(size: size, caret: caret, candidateFrame: candidateFrame, side: .left))
     }
 
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
-        let p = NSPanel(
+        let p = NonKeyPanel(
             contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
@@ -237,7 +279,7 @@ final class ClipboardPanelController {
         p.level = .popUpMenu
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         p.hidesOnDeactivate = false
-        p.becomesKeyOnlyIfNeeded = false
+        p.becomesKeyOnlyIfNeeded = true
         let host = NSHostingView(rootView: ClipboardBarView(model: model))
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
@@ -252,46 +294,19 @@ final class ClipboardPanelController {
         return p
     }
 
-    private func installMonitors() {
-        tearDownMonitors()
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
-            guard let self, self.isVisible, NSApp.keyWindow === self.panel else { return ev }
-            let mods = ev.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if ev.keyCode == 53 || (ev.keyCode == 9 && mods.contains(.control)) { // Esc / ⌃V
-                self.close(); return nil
-            }
-            if ev.keyCode == 3 && mods.contains(.control) { // ⌃F → 切到翻译面板
-                self.close()
-                CompanionPanels.toggleTranslate()
-                return nil
-            }
-            switch ev.keyCode {
-            case 125: self.model.move(1); return nil  // ↓
-            case 126: self.model.move(-1); return nil // ↑
-            case 36:                                  // ⏎ 插入高亮项
-                if let t = self.model.pickSelected() { self.model.onPick?(t) }
-                return nil
-            default:
-                if mods.subtracting(.shift).isEmpty,
-                   let d = ev.charactersIgnoringModifiers?.first?.wholeNumberValue, (1...9).contains(d),
-                   let t = self.model.pick(d - 1) {
-                    self.model.onPick?(t)
-                    return nil
-                }
-            }
-            return ev
-        }
-        resignObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
-            self?.close() // 点回别的应用即收起
+    /// 点到面板外即收起(免激活面板没有 resignKey 时机;全局监听只观察不消费,不影响点击本身)
+    private func installClickOutsideMonitor() {
+        removeClickOutsideMonitor()
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            guard let self, self.isVisible, let panel = self.panel else { return }
+            if !panel.frame.contains(NSEvent.mouseLocation) { self.close() }
         }
     }
 
-    private func tearDownMonitors() {
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
-        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
-        resignObserver = nil
+    private func removeClickOutsideMonitor() {
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        clickMonitor = nil
     }
 }
 
@@ -358,7 +373,7 @@ struct TranslateBarView: View {
                     Spacer()
                 }
             }
-            Text("⏎ 翻译 · 轻点 Shift 切英文模式可输英文 · Esc 关闭")
+            Text("⏎ 翻译 · 字母直接键入,中文 ⌘V 粘贴 · Esc 关闭")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
         }
         .frame(width: 360)
@@ -396,9 +411,13 @@ final class TranslatePanelController {
             }
         }
         reposition(caret: caret, candidateFrame: candidateFrame)
-        PanelFocus.activate(panel)
+        PanelFocus.activate(panel) // 翻译框需要键盘,必须临时激活(组词已由 suspendCompositionForPanel 挂起)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.model.focusToken &+= 1 // 触发 @FocusState 聚焦输入框
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
+            guard let self, self.isVisible, NSApp.keyWindow !== self.panel else { return }
+            self.model.focusToken &+= 1 // 激活竞态兜底:仍未持键再聚焦一次
         }
         installMonitors()
     }
@@ -413,7 +432,7 @@ final class TranslatePanelController {
         guard let panel, panel.isVisible, let hosting else { return }
         let size = hosting.fittingSize
         panel.setContentSize(size)
-        panel.setFrameOrigin(CompanionPanels.origin(size: size, caret: caret, candidateFrame: candidateFrame))
+        panel.setFrameOrigin(CompanionPanels.origin(size: size, caret: caret, candidateFrame: candidateFrame, side: .right))
     }
 
     private func ensurePanel() -> NSPanel {
@@ -451,8 +470,7 @@ final class TranslatePanelController {
             if ev.keyCode == 53 || (ev.keyCode == 3 && mods.contains(.control)) { // Esc / ⌃F
                 self.close(); return nil
             }
-            if ev.keyCode == 9 && mods.contains(.control) { // ⌃V → 切到剪贴板面板
-                self.close()
+            if ev.keyCode == 9 && mods.contains(.control) { // ⌃V → 剪贴板面板并存打开(不关翻译)
                 CompanionPanels.toggleClipboard()
                 return nil
             }

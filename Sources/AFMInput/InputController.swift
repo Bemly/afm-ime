@@ -72,6 +72,8 @@ final class InputController: IMKInputController {
     private var undoStack: [UndoEntry] = []
     /// 已转换段(尚未真正上屏,整句保持预编辑下划线态,最终上屏时一并写入)
     private var committedBuffer = ""
+    /// 翻译面板等需抢键盘的面板打开期间组词挂起(状态保留,面板关闭后原样恢复,不上屏不丢弃)
+    var compositionSuspended = false
 
     private let candidateWindow = CandidateWindowController()
 
@@ -90,6 +92,7 @@ final class InputController: IMKInputController {
         DebugLog.log("activateServer")
         Self.lastActive = self
         ShiftModeMonitor.retryIfNeeded() // 权限补授后无需重启,焦点切换时重试创建监听
+        restoreSuspendedComposition(sender) // 翻译面板关闭还焦点后,原样恢复挂起中的组词
     }
 
     /// IMK 默认只投递 keyDown;要收修饰键事件(flagsChanged)必须显式声明,否则轻点 Shift 永远收不到
@@ -99,6 +102,11 @@ final class InputController: IMKInputController {
         return Int(events.rawValue)
     }
     override func deactivateServer(_ sender: Any!) {
+        if compositionSuspended {
+            // 翻译面板抢焦点所致:组词挂起中,不提交不上屏(状态留在内存,activateServer 恢复)
+            DebugLog.log("deactivateServer(组词挂起中,不提交) raw='\(raw)'")
+            return
+        }
         DebugLog.log("deactivateServer → commitComposition")
         commitComposition(sender)
     }
@@ -130,6 +138,11 @@ final class InputController: IMKInputController {
             DebugLog.log("忽略非按键事件 type=\(event.type)")
             return false
         }
+        // 自己的面板持键(翻译框输入中)→ 全放行:按键必须到达输入框,也不能劫持 lastActive
+        // (实测: 面板激活后自有 app 的事件仍回流 handle,此前字母被拼音引擎吞掉 → 翻译框无法输入)
+        if CompanionPanels.anyKeyWindow {
+            return false
+        }
         Self.lastActive = self
 
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -143,13 +156,23 @@ final class InputController: IMKInputController {
             NSApp.orderFrontCharacterPalette(nil)
             return true
         }
-        // 伴随面板 ⌃V 剪贴板 / ⌃F 翻译(中英模式都可用;自己的面板持键时放行,如翻译框内输入)
-        if !CompanionPanels.anyKeyWindow, mods.contains(.control),
+        // 伴随面板 ⌃V 剪贴板 / ⌃F 翻译(中英模式都可用;⌃V 免激活不打断组词,⌃F 需抢键盘先挂起组词)
+        if mods.contains(.control),
            !mods.contains(.option), !mods.contains(.command), !mods.contains(.shift),
            event.keyCode == 9 || event.keyCode == 3 {
             Self.latestCaret = Self.caretRect(client)
             DebugLog.log("⌃\(event.keyCode == 9 ? "V → 剪贴板" : "F → 翻译")面板")
-            if event.keyCode == 9 { CompanionPanels.toggleClipboard() } else { CompanionPanels.toggleTranslate() }
+            if event.keyCode == 9 {
+                CompanionPanels.toggleClipboard()
+            } else {
+                Self.suspendCompositionForPanel()
+                CompanionPanels.toggleTranslate()
+            }
+            return true
+        }
+        // 剪贴板面板键控(免激活模式客户端仍持焦点,键盘在此路由;组词中按键仍归组词,面板用点击)
+        if CompanionPanels.clipboard.isVisible, raw.isEmpty,
+           CompanionPanels.clipboard.routeKey(event) {
             return true
         }
         // Shift 组合键的"轻点"判定在 ShiftModeMonitor(系统级)完成
@@ -368,9 +391,47 @@ final class InputController: IMKInputController {
         }
     }
 
+    /// 翻译面板要抢键盘(临时激活本进程),组词中打开前调用:状态留在内存不上屏,
+    /// deactivateServer 据此跳过提交,activateServer(面板关闭还焦点后)原样恢复
+    static func suspendCompositionForPanel() {
+        for c in liveControllers.allObjects where !c.raw.isEmpty {
+            c.compositionSuspended = true
+            c.fmGeneration &+= 1 // 掐掉在途 FM,防止面板期间结果回写重开候选窗
+            c.candidateWindow.hide()
+            DebugLog.log("组词挂起(面板抢键盘) raw='\(c.raw)'")
+        }
+    }
+
+    private func restoreSuspendedComposition(_ client: Any!) {
+        guard compositionSuspended else { return }
+        compositionSuspended = false
+        guard !raw.isEmpty else { return }
+        DebugLog.log("组词恢复 raw='\(raw)'")
+        if let textInput = client as? IMKTextInput {
+            let full = committedBuffer + raw
+            let marked = NSMutableAttributedString(string: full)
+            marked.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue],
+                                 range: NSRange(location: 0, length: full.utf16.count))
+            textInput.setMarkedText(marked,
+                                    selectionRange: NSRange(location: marked.length, length: 0),
+                                    replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
+        }
+        updateCandidateWindow(client)
+    }
+
     /// 伴随面板(剪贴板条目/翻译结果)"插入到光标": 组词中先按空格语义上屏首选,再写入客户光标处
-    /// (面板 close 还焦点后延迟调用,目标客户重新活跃后 IMK insertText 才可靠)
+    /// (客户端持焦点时立即插入;翻译面板持键则先关面板还焦点,延迟到目标客户重新活跃再插入)
     static func insertFromPanel(_ text: String) {
+        if let tp = CompanionPanels.translate.panel, tp.isVisible, NSApp.keyWindow === tp {
+            DebugLog.log("插入前先关翻译面板还焦点")
+            CompanionPanels.translate.close()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { Self.doInsert(text) }
+            return
+        }
+        doInsert(text)
+    }
+
+    private static func doInsert(_ text: String) {
         guard let c = lastActive, let client = c.client() else {
             DebugLog.error("insertFromPanel: 无活跃 client")
             return
@@ -481,6 +542,7 @@ final class InputController: IMKInputController {
         fmGeneration &+= 1
         undoStack.removeAll()
         committedBuffer = ""
+        compositionSuspended = false
         if let textInput = client as? IMKTextInput {
             textInput.setMarkedText(NSMutableAttributedString(),
                                     selectionRange: NSRange(location: 0, length: 0),
