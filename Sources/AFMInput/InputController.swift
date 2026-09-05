@@ -157,9 +157,7 @@ final class InputController: IMKInputController {
             refresh(client)
             return true
 
-        case eff == "'" where composing: // 组词中 ' 是音节分隔符
-            raw.append(eff)
-            refresh(client)
+        case eff == "'" where composing: // 组词中 ' 仅作打字辅助分隔符,不入缓冲(保证渐进前缀的字母偏移计算)
             return true
 
         case event.keyCode == 49 where composing: // 空格键(keyCode 49)→ 上屏选中候选,不插入空格
@@ -463,7 +461,8 @@ final class InputController: IMKInputController {
         DebugLog.log("FM 排队 gen=\(gen) 模式=\(needSentence ? "整句" : "重排") 上文='\(context)' 拼音='\(snapshotRaw)' 候选=\(texts)")
 
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            // 整句预测立即触发(词典覆盖不足正是需要整句的时机);候选重排保持 400ms 防抖
+            try? await Task.sleep(nanoseconds: needSentence ? 50_000_000 : 400_000_000)
             guard let self else { return }
             let stillCurrent = await MainActor.run { self.raw == snapshotRaw && self.fmGeneration == gen }
             guard stillCurrent else {

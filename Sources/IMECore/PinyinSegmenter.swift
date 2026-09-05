@@ -31,7 +31,7 @@ public struct PinyinSegmenter {
     /// 枚举切分方式(动态规划)。每个位置保留 maxPaths 条,
     /// 优先级: 缩写少 > 尾部完整 > 音节数少(长词优先) > 字典序,保证最优路径不被截断丢失。
     public func segment(_ input: String, maxPaths: Int = 12) -> [Segmentation] {
-        let chars = input.lowercased().map(String.init)
+        let chars = input.lowercased().filter { $0 != "'" }.map(String.init)
         guard !chars.isEmpty, chars.count <= 40 else { return [] }
         let n = chars.count
 

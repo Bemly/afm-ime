@@ -138,12 +138,19 @@ func isCJK(_ word: String) -> Bool {
 var merged: [String: UInt32] = [:] // "key\x01word" -> max weight
 var syllables = Set<String>()
 var dupCount = 0
+/// 音节表只由 rime-ice 主库定义(中文音节集合封闭,主库全覆盖);
+/// 外部词库的公式/符号键(nacl/nh/ac)不得进切分表,否则 nhao 会被切成 nh+ao——它们靠缩写直查命中,无需进表
+var feedSyllables = true
 
 func accept(_ word: String, _ sylsList: [[String]], _ weight: UInt32) {
     for syls in sylsList {
         let key = syls.joined(separator: " ")
         guard !key.isEmpty, key.utf8.count <= 255 else { continue }
-        for s in syls { syllables.insert(s) }
+        if feedSyllables {
+            for s in syls where s.count > 1 || s == "a" || s == "o" || s == "e" {
+                syllables.insert(s) // 单字母键(元素符号 n/h 等)不是真音节,不入表
+            }
+        }
         merge("\(key)\u{01}\(word)", weight)
         // 简拼键: 各音节首字母连接(rime abbrev 等价,n→你、awsl→啊我死了);
         // 只进 merged,不进 syllables 表(首字母非真音节,会污染切分器)
@@ -267,6 +274,7 @@ ingest(Source(path: dictDir + "/base.dict.yaml", label: "base.dict.yaml", mode: 
 ingest(Source(path: dictDir + "/ext.dict.yaml", label: "ext.dict.yaml", mode: .rimeYaml))
 print("tencent 注音中…")
 ingest(Source(path: dictDir + "/tencent.dict.yaml", label: "tencent.dict.yaml", mode: .rimeYamlAuto))
+feedSyllables = false // 外部词库不再定义音节(防公式/符号键污染切分表)
 
 for f in repeatedArgs("--rime") {
     ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .rimeYaml))

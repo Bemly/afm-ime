@@ -53,6 +53,9 @@ def main() -> None:
             if not is_cjk(kw):
                 continue
             k = key_of(kw)
+            # 退化键防御: 单字母"音节"(嗯→n)会污染切分器的音节表,只留 a/o/e 合法独用音节
+            if k and "'" not in k and len(k) == 1 and k not in ("a", "o", "e"):
+                continue
             if k and k not in keys:
                 keys.append(k)
             if len(keys) >= MAX_KEYS:
