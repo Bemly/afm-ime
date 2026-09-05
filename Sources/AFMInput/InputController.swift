@@ -90,6 +90,8 @@ final class InputController: IMKInputController {
     var compositionSuspended = false
 
     private let candidateWindow = CandidateWindowController()
+    /// 候选条水滴拖拽模型(视图直写局部刷新;onDrop 松手吸附上屏)
+    private let dropletModel = CandidateDropletModel()
 
     override init(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
@@ -98,6 +100,13 @@ final class InputController: IMKInputController {
         candidateWindow.onFrameChange = { frame in
             Self.latestCandidateFrame = frame ?? .null
             CompanionPanels.repositionAll()
+        }
+        dropletModel.onDrop = { [weak self] fraction in // 水滴松手:吸附最近候选上屏
+            guard let self, !self.candidates.isEmpty else { return }
+            self.dropletModel.reset()
+            let idx = max(0, min(self.candidates.count - 1, Int(fraction.rounded())))
+            DebugLog.log("水滴松手 → 上屏 idx=\(idx) (fraction=\(String(format: "%.2f", fraction)))")
+            self.commitCandidate(at: idx, client: self.client())
         }
         DebugLog.log("InputController 初始化 client=\(client != nil)")
     }
@@ -466,6 +475,7 @@ final class InputController: IMKInputController {
         selectedIndex = 0
         barWindowStart = 0
         gridRowStart = 0
+        dropletModel.reset() // 组词刷新,水滴归位
         exitTranslationState() // 组词已变化,翻译态作废(窗口由本次 refresh 统一刷新)
         DebugLog.log("refresh '\(raw)' → 候选 \(candidates.count) 条: "
             + candidates.prefix(5).map { "\($0.text)(\(Int($0.score)))" }.joined(separator: " "))
@@ -569,7 +579,7 @@ final class InputController: IMKInputController {
             candidateWindow.show(
                 items: [], selectedIndex: 0, windowStart: 0, slideForward: true,
                 expanded: false, rowStart: 0, rowSlideDown: true,
-                translation: nil, isLoading: true, caretRect: caret,
+                translation: nil, isLoading: true, droplet: dropletModel, caretRect: caret,
                 onSelect: { _ in }, onToggleExpand: {})
             return
         }
@@ -586,6 +596,7 @@ final class InputController: IMKInputController {
             rowStart: gridRowStart,
             rowSlideDown: gridSlideDown,
             translation: translation,
+            droplet: dropletModel,
             caretRect: caret,
             onSelect: { [weak self] idx in
                 DispatchQueue.main.async {
@@ -695,6 +706,7 @@ final class InputController: IMKInputController {
         gridExpanded = false
         barWindowStart = 0
         gridRowStart = 0
+        dropletModel.reset()
         exitTranslationState()
         if let textInput = client as? IMKTextInput {
             textInput.setMarkedText(NSMutableAttributedString(),
