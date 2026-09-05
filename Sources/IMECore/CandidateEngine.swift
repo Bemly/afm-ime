@@ -38,6 +38,7 @@ public final class CandidateEngine {
         }
 
         let segs = segmenter.segment(rawInput)
+        var anyExact = false // 任何路径已有精确命中 → 后续路径不再渐进兜底(防垃圾路径拉入短词)
         for (si, seg) in segs.enumerated() {
             let key = seg.syllables.joined(separator: " ")
             let keyFactor = seg.trailingPartial ? 0.45 : 1.0
@@ -51,18 +52,62 @@ public final class CandidateEngine {
                     fuzzyVariants.append(v)
                 }
             }
+            // 单字母缩写音节展开: n+hao → ni/na/ne…+hao(简拼混输),笛卡尔积封顶 16
+            // 仅前 2 条短路径(≤4 段且 ≤2 个缩写)展开,长垃圾路径的展开查询无意义
+            if si < 2, seg.abbrevFlags.contains(true),
+               seg.syllables.count <= 4, seg.abbrevFlags.filter({ $0 }).count <= 2 {
+                var products = [""]
+                for (i, syl) in seg.syllables.enumerated() {
+                    let options = seg.abbrevFlags[i]
+                        ? store.syllables.filter { $0.hasPrefix(syl) && $0.count > 1 }
+                        : [syl]
+                    var next: [String] = []
+                    for base in products {
+                        for o in options {
+                            next.append(base.isEmpty ? o : base + " " + o)
+                            if next.count >= 16 { break }
+                        }
+                        if next.count >= 16 { break }
+                    }
+                    products = next
+                    if products.isEmpty { break }
+                }
+                for k in products.prefix(16) where k != key {
+                    queries.append((k, 0.5))
+                    fuzzyVariants.append("缩写:" + k)
+                }
+            }
+            var foundExact = false
             for q in queries {
                 let fuzzy = q.factor < 1.0
                 for hit in store.query(prefix: q.key,
                                        exactCap: 32,
                                        extCap: fuzzy ? 48 : 256,
                                        scanBudget: fuzzy ? 20_000 : 60_000) {
+                    if q.factor == 1.0, hit.key == q.key { foundExact = true }
                     let isExact = hit.key == q.key
                     let score = Double(hit.weight) * (isExact ? 1.0 : 0.6) * keyFactor * q.factor
                     if let old = best[hit.word], old.score >= score { continue }
                     best[hit.word] = Candidate(text: hit.word, pinyin: hit.key, score: score)
                 }
             }
+            // 渐进前缀兜底(仅纯全拼路径;缩写路径的主键本就无词典对应,不应触发):
+            // 完整键无精确命中时,取覆盖前几个音节的词,收集 4 级由长到短
+            // 长句打全拼但词库无对应短语时,给出以开头音节为词的候选(nishiyizhimaoniang → 你是X)
+            if si < 2, !anyExact, !foundExact, !seg.abbrevFlags.contains(true), seg.syllables.count > 1 {
+                var syls = seg.syllables
+                for drop in 1...min(4, syls.count - 1) {
+                    syls.removeLast()
+                    let pk = syls.joined(separator: " ")
+                    for hit in store.query(prefix: pk, exactCap: 12, extCap: 2, scanBudget: 5_000) {
+                        guard hit.key == pk else { continue } // 只要完整覆盖前缀的词
+                        let score = Double(hit.weight) * pow(0.5, Double(drop))
+                        if let old = best[hit.word], old.score >= score { continue }
+                        best[hit.word] = Candidate(text: hit.word, pinyin: hit.key, score: score)
+                    }
+                }
+            }
+            if foundExact { anyExact = true }
         }
         let out = Array(best.values.sorted { $0.score > $1.score }.prefix(limit))
         DebugLog.log("引擎[\(rawInput)] 切分=\(segs.map { $0.syllables.joined(separator: "'") }.joined(separator: " / ")) → \(out.count) 条"

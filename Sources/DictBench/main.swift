@@ -44,7 +44,9 @@ let queries = [
     "gun",                                // 符号 丨(与 滚 同键,权重排序)
     "shoubiao",                           // emoji ⌚
     "awsl",                               // 简拼: 啊我死了/阿伟死了
-    "nh",                                 // 简拼: 你好
+    "nh",                                 // 简拼: 女孩/您好
+    "nhao",                               // 简拼混输: n+hao → 你好
+    "nishiyizhimaoniang",                 // 渐进前缀: 你是X 系列词
 ]
 for q in queries {
     let tq = Date()
