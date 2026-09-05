@@ -57,6 +57,10 @@ CHEM_ARGS=()
 [ -f "Experiments/化学式词库/化学式词库.txt" ] && CHEM_ARGS+=(--apostrophe "Experiments/化学式词库/化学式词库.txt")
 [ -f "Experiments/化学式词库/希腊字母词库.txt" ] && CHEM_ARGS+=(--apostrophe "Experiments/化学式词库/希腊字母词库.txt")
 
+# 网络用语全集(维基百科加粗词条 markdown 无序列表)
+SLANG_ARGS=()
+[ -f "Experiments/中国大陆网络用语-加粗词.md" ] && SLANG_ARGS+=(--md-list "Experiments/中国大陆网络用语-加粗词.md")
+
 # emoji 词库: CLDR 官方中文注解 → 拼音(缓存复用,首次需网络;生成失败仅告警不中断)
 if [ -x "$MCDIR/.venv/bin/python" ]; then
   "$MCDIR/.venv/bin/python" scripts/build_emoji.py \
@@ -78,5 +82,6 @@ swift build -c release
   "${EAR_ARGS[@]}" \
   "${RECI_ARGS[@]}" \
   "${CHEM_ARGS[@]}" \
+  "${SLANG_ARGS[@]}" \
   "${EMOJI_ARGS[@]}" \
   --out Data/dict.bin

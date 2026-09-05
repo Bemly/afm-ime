@@ -178,6 +178,7 @@ struct Source {
         case freqTSV       // 词\t频次 → 自动注音,权重 clamp 1...100_000
         case wordList      // 提取引号内 CJK 词 → 自动注音,权重 100
         case mdKeywords    // markdown 表第一列(梗合集):顿号拆分、去两端装饰、纯 CJK → 自动注音,权重 100
+        case mdList        // markdown 无序列表("- 词")(网络用语全集):同 mdKeywords 清洗管线
     }
     let path: String
     let label: String
@@ -189,6 +190,18 @@ func ingest(_ src: Source) {
     func bump(_ word: String, _ sylsList: [[String]], _ weight: UInt32) {
         kept += sylsList.isEmpty ? 0 : 1
         accept(word, sylsList, weight)
+    }
+    // 关键词清洗管线(mdKeywords/mdList 共用): 顿号拆分、去两端装饰、纯 CJK ≥2 字 → 自动注音
+    func keywordCell(_ cell: String) {
+        for piece in cell.components(separatedBy: "、") {
+            var w = piece.trimmingCharacters(in: .whitespaces)
+            while let f = w.first, !isCJK(String(f)) { w.removeFirst() }
+            while let l = w.last, !isCJK(String(l)) { w.removeLast() }
+            guard isCJK(w), w.count >= 2, w.count <= 12 else { continue } // 拉丁/含占位符不可拼音键入,单字 8105 已覆盖
+            let list = annotate(w)
+            guard !list.isEmpty else { skipped += 1; continue }
+            bump(w, list, 100)
+        }
     }
 
     switch src.mode {
@@ -251,16 +264,13 @@ func ingest(_ src: Source) {
             guard cells.count >= 2 else { return }
             let cell = cells[1].trimmingCharacters(in: .whitespaces)
             guard cell != "关键词", !cell.hasPrefix("-") else { return } // 表头/分隔行
-            for piece in cell.components(separatedBy: "、") {
-                var w = piece.trimmingCharacters(in: .whitespaces)
-                // 去两端非 CJK 装饰(⚡/emoji/引号等)
-                while let f = w.first, !isCJK(String(f)) { w.removeFirst() }
-                while let l = w.last, !isCJK(String(l)) { w.removeLast() }
-                guard isCJK(w), w.count >= 2, w.count <= 12 else { continue } // 拉丁/含占位符不可拼音键入,单字 8105 已覆盖
-                let list = annotate(w)
-                guard !list.isEmpty else { skipped += 1; continue }
-                bump(w, list, 100)
-            }
+            keywordCell(cell)
+        }
+    case .mdList:
+        forEachLine(src.path) { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            guard t.hasPrefix("- ") else { return } // 仅收无序列表项,标题/引用/表格不涉
+            keywordCell(String(t.dropFirst(2)))
         }
     }
     print("\(src.label): 收录 \(kept) 跳过 \(skipped) (\(String(format: "%.1f", -t0.timeIntervalSinceNow))s)")
@@ -290,6 +300,9 @@ for f in repeatedArgs("--wordlist") {
 }
 for f in repeatedArgs("--md-keywords") {
     ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .mdKeywords))
+}
+for f in repeatedArgs("--md-list") {
+    ingest(Source(path: f, label: (f as NSString).lastPathComponent, mode: .mdList))
 }
 
 print("合并去重后: \(merged.count) 条 / 重复 \(dupCount) / 峰值内存 \(String(format: "%.0f", getRSSMB()))MB (\(String(format: "%.1f", -t0.timeIntervalSinceNow))s)")
