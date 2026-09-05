@@ -15,8 +15,10 @@ struct CandidateBarView: View {
     var items: [CandidateItem]
     var selectedIndex: Int      // 全局下标
     var hasMorePages: Bool
+    var canPrevPage: Bool       // 非首页时显示 ◂
     var isLoading: Bool         // 无词典候选时占位,等 FM 整句
     var onSelect: (Int) -> Void
+    var onPage: (Int) -> Void   // 点击 ◂/▸ 翻页(±1)
 
     var body: some View {
         HStack(spacing: 3) {
@@ -31,19 +33,28 @@ struct CandidateBarView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
             }
+            if canPrevPage {
+                pageArrow("◂", action: { onPage(-1) })
+            }
             ForEach(items) { item in
                 CandidateCell(item: item, selected: item.index == selectedIndex)
                     .onTapGesture { onSelect(item.index) }
             }
             if hasMorePages {
-                Text("▸")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 2)
+                pageArrow("▸", action: { onPage(+1) })
             }
         }
         .fixedSize(horizontal: true, vertical: false) // 防截断:按内容自然宽度撑开
         .padding(9)
+    }
+
+    private func pageArrow(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Text(symbol)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
     }
 }
 
@@ -80,6 +91,7 @@ final class CandidateWindowController {
     private var panel: NSPanel?
     private var hostingView: NSHostingView<CandidateBarView>?
     private var onSelect: (Int) -> Void = { _ in }
+    private var onPage: (Int) -> Void = { _ in }
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
@@ -98,8 +110,9 @@ final class CandidateWindowController {
         p.becomesKeyOnlyIfNeeded = true
 
         let host = NSHostingView(rootView: CandidateBarView(
-            items: [], selectedIndex: 0, hasMorePages: false, isLoading: false,
-            onSelect: { [weak self] idx in self?.onSelect(idx) }))
+            items: [], selectedIndex: 0, hasMorePages: false, canPrevPage: false,
+            isLoading: false, onSelect: { [weak self] idx in self?.onSelect(idx) },
+            onPage: { [weak self] delta in self?.onPage(delta) }))
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = 22
@@ -122,17 +135,22 @@ final class CandidateWindowController {
 
     /// 显示/刷新候选窗。caretRect: 屏幕坐标矩形(AppKit 底左原点);null 时回退底部居中。
     /// isLoading 且 items 为空时显示 FM 占位(光标处预留空间,整句到达后原位替换)。
+    /// canPrevPage/onPage: ◂/▸ 鼠标点击翻页。
     func show(items: [CandidateItem], selectedIndex: Int,
-              hasMorePages: Bool, isLoading: Bool = false,
-              caretRect: NSRect, onSelect: @escaping (Int) -> Void) {
+              hasMorePages: Bool, canPrevPage: Bool, isLoading: Bool = false,
+              caretRect: NSRect, onSelect: @escaping (Int) -> Void,
+              onPage: @escaping (Int) -> Void = { _ in }) {
         let panel = ensurePanel()
         self.onSelect = onSelect
+        self.onPage = onPage
         guard let host = hostingView else { return }
 
         host.rootView = CandidateBarView(
             items: items, selectedIndex: selectedIndex,
-            hasMorePages: hasMorePages, isLoading: isLoading,
-            onSelect: { [weak self] idx in self?.onSelect(idx) })
+            hasMorePages: hasMorePages, canPrevPage: canPrevPage,
+            isLoading: isLoading,
+            onSelect: { [weak self] idx in self?.onSelect(idx) },
+            onPage: { [weak self] delta in self?.onPage(delta) })
 
         let size = host.fittingSize
         panel.setContentSize(size)

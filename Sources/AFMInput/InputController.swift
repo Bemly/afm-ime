@@ -19,6 +19,29 @@ final class InputController: IMKInputController {
 
     static let perPage = 9
 
+    // MARK: - 中英模式(系统级 ShiftTap 轻点切换,UserDefaults 跨重启记忆)
+
+    static var englishMode: Bool {
+        get { UserDefaults.standard.bool(forKey: "AFMEnglishMode") }
+        set { UserDefaults.standard.set(newValue, forKey: "AFMEnglishMode") }
+    }
+
+    static let liveControllers = NSHashTable<InputController>.weakObjects()
+
+    /// ShiftModeMonitor(主线程)调用:组词中的实例先上屏拼音原文,再切模式
+    static func shiftTappedToggle() {
+        for c in liveControllers.allObjects {
+            if !c.raw.isEmpty {
+                DebugLog.log("Shift 切换 → 先上屏组词原文 '\(c.raw)'")
+                c.commitComposition(c.client())
+            }
+            c.quoteOpenSingle = false
+            c.quoteOpenDouble = false
+        }
+        englishMode.toggle()
+        DebugLog.log("Shift 切换 → \(englishMode ? "英文(直通)" : "中文")模式")
+    }
+
     // MARK: - 组词状态
 
     private var raw = ""                                  // 拼音缓冲
@@ -27,15 +50,26 @@ final class InputController: IMKInputController {
     private var page = 0
     private var aiBoostText: String?                      // FM 提到首位的词
     private var fmGeneration = 0                          // FM 请求代际(防陈旧结果回写)
+    private var quoteOpenSingle = false                   // '' 成对交替
+    private var quoteOpenDouble = false                   // "" 成对交替
     private let candidateWindow = CandidateWindowController()
 
     override init(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
+        Self.liveControllers.add(self)
         DebugLog.log("InputController 初始化 client=\(client != nil)")
     }
 
     override func activateServer(_ sender: Any!) {
         DebugLog.log("activateServer")
+        ShiftModeMonitor.retryIfNeeded() // 权限补授后无需重启,焦点切换时重试创建监听
+    }
+
+    /// IMK 默认只投递 keyDown;要收修饰键事件(flagsChanged)必须显式声明,否则轻点 Shift 永远收不到
+    /// (参考 fcitx5-macos controller.swift 同款覆写)
+    override func recognizedEvents(_ sender: Any!) -> Int {
+        let events: NSEvent.EventTypeMask = [.keyDown, .flagsChanged]
+        return Int(events.rawValue)
     }
     override func deactivateServer(_ sender: Any!) {
         DebugLog.log("deactivateServer → commitComposition")
@@ -53,13 +87,29 @@ final class InputController: IMKInputController {
             DebugLog.error("handle 被调用但引擎未加载,全部放行")
             return false
         }
-        guard let event, event.type == .keyDown else {
-            DebugLog.log("忽略非 keyDown 事件 type=\(event.map { "\($0.type)" } ?? "nil")")
+        guard let event else {
+            DebugLog.log("忽略 nil 事件")
+            return false
+        }
+        DebugLog.log("handle type=\(event.type.rawValue) keyCode=\(event.keyCode) chars='\(event.characters ?? "?")' mods=\(event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue)")
+
+        // 修饰键事件仅在 AppKit 应用可达(Electron/Chromium 系不转发,recognizedEvents 声明也无效);
+        // Shift 中英切换由 ShiftModeMonitor(系统级 CGEventTap)处理,此处仅留诊断日志
+        if event.type == .flagsChanged {
+            DebugLog.log("flagsChanged(IMK) keyCode=\(event.keyCode) mods=\(event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue)")
+            return false
+        }
+        guard event.type == .keyDown else {
+            DebugLog.log("忽略非按键事件 type=\(event.type)")
             return false
         }
 
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if !mods.isSubset(of: [.shift, .capsLock]) {
+        // 方向键 keyDown 自带 function|numericPad 修饰位(0xA00000),须剔除后再判定,
+        // 否则 ←/→/↑/↓ 全被当成"带修饰键"放行给应用(光标移动而非切换候选)
+        let meaningful = mods.intersection([.shift, .control, .option, .command, .capsLock])
+        // Shift 组合键的"轻点"判定在 ShiftModeMonitor(系统级)完成
+        if !meaningful.isSubset(of: [.shift, .capsLock]) {
             DebugLog.log("放行带修饰键 key chars=\(event.charactersIgnoringModifiers ?? "?") mods=\(mods.rawValue)")
             return false
         }
@@ -70,12 +120,25 @@ final class InputController: IMKInputController {
             return false
         }
         let key = Character(chars).lowercased().first ?? "_"
+        // Shift 组合符还原(shiftedSymbols): 部分客户端 shift+1 的 chars='1',还原成 '!'
+        let eff = (mods.contains(.shift) ? Self.shiftedSymbols[chars] : nil) ?? chars
+        let effScalar = eff.unicodeScalars.first ?? scalar
         let composing = !raw.isEmpty
-        DebugLog.log("key '\(chars)' scalar=\(scalar.value) keyCode=\(event.keyCode) composing=\(composing) raw='\(raw)'")
+        DebugLog.log("key '\(chars)' eff='\(eff)' scalar=\(scalar.value) keyCode=\(event.keyCode) composing=\(composing) raw='\(raw)'")
+
+        if Self.englishMode { // 英文模式:全部直通——无组词无候选框,标点半角由应用自然插入
+            DebugLog.log("英文模式放行 '\(chars)'")
+            return false
+        }
 
         switch true {
-        case ("a"..."z").contains(key), key == "'":
+        case ("a"..."z").contains(key): // 字母入缓冲
             raw.append(key)
+            refresh(client)
+            return true
+
+        case eff == "'" where composing: // 组词中 ' 是音节分隔符
+            raw.append(eff)
             refresh(client)
             return true
 
@@ -89,8 +152,8 @@ final class InputController: IMKInputController {
             commit(raw, client: client)
             return true
 
-        case (49...57).contains(scalar.value) where !candidates.isEmpty: // 字符 '1'-'9' 选当前页
-            let idx = page * Self.perPage + Int(scalar.value) - 49
+        case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 字符 '1'-'9' 选当前页(shift+数字=符号,不选词)
+            let idx = page * Self.perPage + Int(effScalar.value) - 49
             if idx < candidates.count {
                 DebugLog.log("数字 \(Int(scalar.value) - 48) → 上屏 idx=\(idx)")
                 commitCandidate(at: idx, client: client)
@@ -111,26 +174,56 @@ final class InputController: IMKInputController {
             clearComposition(client)
             return true
 
-        case event.keyCode == 125 where composing: // ↓ 键(keyCode 125)高亮下一个
+        case event.keyCode == 125 || event.keyCode == 124 where composing: // ↓/→ 键 → 高亮下一个
             moveSelection(+1)
-            DebugLog.log("↓ 选中=\(selectedIndex) 页=\(page)")
+            DebugLog.log("↓/→ 选中=\(selectedIndex) 页=\(page)")
             updateCandidateWindow(client)
             return true
 
-        case event.keyCode == 126 where composing: // ↑ 键(keyCode 126)高亮上一个
+        case event.keyCode == 126 || event.keyCode == 123 where composing: // ↑/← 键 → 高亮上一个
             moveSelection(-1)
-            DebugLog.log("↑ 选中=\(selectedIndex) 页=\(page)")
+            DebugLog.log("↑/← 选中=\(selectedIndex) 页=\(page)")
             updateCandidateWindow(client)
             return true
 
-        case (chars == "=" || chars == "-") where composing: // =/- 翻页
-            changePage(chars == "=" ? 1 : -1)
-            DebugLog.log("翻页\(chars == "=" ? "+" : "-") → 页=\(page)")
+        case (eff == "=" || eff == "-") where composing: // =/- 翻页
+            changePage(eff == "=" ? 1 : -1)
+            DebugLog.log("翻页\(eff == "=" ? "+" : "-") → 页=\(page)")
             updateCandidateWindow(client)
             return true
 
         default:
-            if composing { // 标点等: 先上屏首选,标点放行
+            return handlePunctuation(eff, composing: composing, client: client)
+        }
+    }
+
+    // MARK: - 中文全角标点(英文模式不会走到这里)
+
+    static let fullWidthPunct: [String: String] = [
+        ",": "，", ".": "。", ";": "；", ":": "：",
+        "?": "？", "!": "！", "(": "（", ")": "）",
+        "[": "【", "]": "】", "{": "「", "}": "」", "<": "《", ">": "》",
+        "\\": "、", "`": "·", "~": "～", "$": "￥", "_": "——", "^": "……",
+    ]
+
+    /// 部分客户端 shift+标点的 charactersIgnoringModifiers 不含 shift 效果(返回基础字符),
+    /// 按住 Shift 时手动还原成上档符号;已应用 shift 的客户端查不到表、原样放行,两种行为都正确
+    static let shiftedSymbols: [String: String] = [
+        "1": "!", "2": "@", "3": "#", "4": "$", "5": "%", "6": "^", "7": "&", "8": "*",
+        "9": "(", "0": ")", "-": "_", "=": "+", "[": "{", "]": "}", "\\": "|",
+        ";": ":", "'": "\"", ",": "<", ".": ">", "/": "?", "`": "~",
+    ]
+
+    /// 标点处理:命中映射 → (组词中先上屏首选)插入全角,引号成对交替;未映射(-=/ 空格 数字 / 等)按旧逻辑放行
+    private func handlePunctuation(_ chars: String, composing: Bool, client: Any!) -> Bool {
+        let mapped: String?
+        switch chars {
+        case "'": quoteOpenSingle.toggle(); mapped = quoteOpenSingle ? "‘" : "’"
+        case "\"": quoteOpenDouble.toggle(); mapped = quoteOpenDouble ? "“" : "”"
+        default: mapped = Self.fullWidthPunct[chars]
+        }
+        guard let fw = mapped else {
+            if composing { // 未映射标点: 先上屏首选,原标点放行
                 DebugLog.log("标点 '\(chars)' → 先上屏首选再放行")
                 commit(candidates.first?.text ?? raw, client: client)
             } else {
@@ -138,6 +231,16 @@ final class InputController: IMKInputController {
             }
             return false
         }
+        if composing {
+            DebugLog.log("标点 '\(chars)' → 上屏首选 + 全角 '\(fw)'")
+            commit(candidates.first?.text ?? raw, client: client)
+        } else {
+            DebugLog.log("标点 '\(chars)' → 全角 '\(fw)'")
+        }
+        guard let textInput = client as? IMKTextInput else { return false }
+        textInput.insertText(NSAttributedString(string: fw),
+                             replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
+        return true
     }
 
     // MARK: - 组词状态
@@ -223,8 +326,8 @@ final class InputController: IMKInputController {
             let caret = Self.caretRect(client)
             DebugLog.log("候选窗占位(FM 整句中) caret=\(NSStringFromRect(caret))")
             candidateWindow.show(
-                items: [], selectedIndex: 0, hasMorePages: false, isLoading: true,
-                caretRect: caret, onSelect: { _ in })
+                items: [], selectedIndex: 0, hasMorePages: false, canPrevPage: false,
+                isLoading: true, caretRect: caret, onSelect: { _ in }, onPage: { _ in })
             return
         }
         let caret = Self.caretRect(client)
@@ -233,11 +336,19 @@ final class InputController: IMKInputController {
             items: pageItems(),
             selectedIndex: selectedIndex,
             hasMorePages: (page + 1) * Self.perPage < candidates.count,
+            canPrevPage: page > 0,
             caretRect: caret,
             onSelect: { [weak self] idx in
                 DispatchQueue.main.async {
                     DebugLog.log("点击候选 idx=\(idx)")
                     self?.commitCandidate(at: idx, client: self?.client())
+                }
+            },
+            onPage: { [weak self] delta in
+                DispatchQueue.main.async {
+                    DebugLog.log("点击翻页 \(delta > 0 ? "▸" : "◂") → 页=\((self?.page ?? 0) + delta)")
+                    self?.changePage(delta)
+                    self?.updateCandidateWindow(self?.client())
                 }
             })
     }
