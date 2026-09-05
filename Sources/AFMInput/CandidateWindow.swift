@@ -39,7 +39,7 @@ final class CandidateDropletModel: ObservableObject {
     private(set) var itemCount = 0
     private(set) var barGlassHeight: CGFloat = 44 // 玻璃条高度(点)
     private(set) var selectedIndex = 0
-    var snapshotScale: CGFloat = 2                // 幽灵行快照倍率
+    @Published var items: [CandidateItem] = []    // 幽灵折射层的内容源(overlay 渲染)
     var onDrop: ((Double) -> Void)?               // 松手:连续全局下标 → 吸附上屏
 
     // 几何输入(cell frame 回写)
@@ -53,16 +53,12 @@ final class CandidateDropletModel: ObservableObject {
 
     // 产出(overlay 直接渲染)
     @Published var blobFrame: CGRect? = nil       // 水滴最终 frame(含缩放/挤压)
-    @Published var lensImage: CGImage? = nil      // CI 折射输出(仅按压中)
-    var lensScale: CGFloat = 2
     /// 网格/翻译/占位等非候选条形态:水滴整体隐藏
     var suppressed = false
 
-    // 幽灵行快照(内部;控制器经 ImageRenderer 重拍)
-    var ghostImage: CGImage?
-
-    func applyLayout(count: Int, windowStart: Int, barGlassHeight: CGFloat, selectedIndex: Int) {
-        self.itemCount = count
+    func applyLayout(items: [CandidateItem], windowStart: Int, barGlassHeight: CGFloat, selectedIndex: Int) {
+        self.items = items
+        self.itemCount = items.count
         self.windowStart = windowStart
         self.barGlassHeight = barGlassHeight
         self.selectedIndex = selectedIndex
@@ -171,12 +167,11 @@ final class CandidateDropletModel: ObservableObject {
         return Double(first)
     }
 
-    /// 重算水滴几何(总是)+ 折射图(仅按压中)
+    /// 重算水滴几何(折射由 overlay 的 layerEffect 直接在幽灵层上做,模型只管几何)
     func recompute() {
         guard !suppressed,
               let cell = interpolatedFrame(at: dragFraction ?? Double(selectedIndex)) else {
             blobFrame = nil
-            lensImage = nil
             return
         }
         // 静止尺寸: 高度 ≈ 0.875×玻璃条(Kyant0 水滴 56/条 64),宽 = cell + 6
@@ -188,23 +183,7 @@ final class CandidateDropletModel: ObservableObject {
         let v = max(-1, min(1, velocity))
         let sx = pressScale / (1 - max(-0.2, min(0.2, v * 0.075)))
         let sy = pressScale * (1 - max(-0.2, min(0.2, v * 0.025)))
-        let blob = rest.scaledAboutCenter(sx: sx, sy: sy)
-        blobFrame = blob
-
-        // 折射: 仅按压中(Kyant0 lens(10dp*progress, 14dp*progress);静止时内容直接透过玻璃)
-        if press > 0, let ghost = ghostImage, rowFrame.width > 0 {
-            let scale = snapshotScale
-            let rectInImage = CGRect(
-                x: (blob.minX - rowFrame.minX) * scale,
-                y: (blob.minY - rowFrame.minY) * scale,
-                width: blob.width * scale,
-                height: blob.height * scale)
-            lensImage = DropletLens.render(ghost: ghost, rect: rectInImage,
-                                           refraction: (h: 10 * press * scale, amount: -14 * press * scale))
-            lensScale = scale
-        } else {
-            lensImage = nil
-        }
+        blobFrame = rest.scaledAboutCenter(sx: sx, sy: sy)
     }
 }
 
@@ -255,6 +234,7 @@ struct CandidateBarView: View {
         }
         .fixedSize(horizontal: true, vertical: false) // 防截断:按内容自然宽度撑开
         .padding(9)
+        .coordinateSpace(name: "candBar") // 坐标基准 = 玻璃条内容矩形(cell/行/水滴 frame 全在此空间)
     }
 
     // MARK: 候选条(滑动窗口;水滴渲染在面板层 DropletOverlayView,这里只管内容与手势)
@@ -275,7 +255,6 @@ struct CandidateBarView: View {
         }
         .modifier(RowFrameReporter(model: droplet))
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: windowStart)
-        .coordinateSpace(name: "candBar")
         .contentShape(Rectangle())
         .gesture(dragGesture)
     }
@@ -416,13 +395,9 @@ struct DropletOverlayView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if let f = model.blobFrame {
-                blob(f)
-                if let img = model.lensImage {
-                    Image(img, scale: model.lensScale, orientation: .up, label: Text(""))
-                        .frame(width: f.width, height: f.height)
-                        .offset(x: f.minX, y: f.minY)
-                        .allowsHitTesting(false)
-                }
+                blobGlass(f)
+                ghostRefracted(f)
+                blobDressing(f)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -430,8 +405,9 @@ struct DropletOverlayView: View {
         .allowsHitTesting(false)
     }
 
-    @ViewBuilder private func blob(_ f: CGRect) -> some View {
-        let material = Group {
+    /// 玻璃水滴本体(26+ 系统玻璃/<26 白色半透明)+ 投影
+    @ViewBuilder private func blobGlass(_ f: CGRect) -> some View {
+        Group {
             if #available(macOS 26.0, *) {
                 Color.clear.glassEffect(.regular.interactive(), in: Capsule())
             } else {
@@ -439,19 +415,39 @@ struct DropletOverlayView: View {
             }
         }
         .frame(width: f.width, height: f.height)
-        .overlay {
-            Capsule().fill(.white.opacity(0.08 * model.press)) // Kyant0 onDrawSurface 容器色
-        }
-        .overlay {
-            Capsule().stroke(
-                LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.05)],
-                               startPoint: .top, endPoint: .bottom),
-                lineWidth: 1)
-                .opacity(0.3 + 0.5 * model.press) // 上缘高光
-        }
         .shadow(color: .black.opacity(0.22 * model.press), radius: 4 + 3 * model.press, y: 2)
         .offset(x: f.minX, y: f.minY)
-        material
+    }
+
+    /// 折射的幽灵层: 幽灵行(强调色)经 Metal lens 掩膜+折射,仅水滴内可见
+    /// (构建期 default.metallib 缺失 → maskShader nil → 无此层,水滴退化为纯玻璃)
+    @ViewBuilder private func ghostRefracted(_ f: CGRect) -> some View {
+        if #available(macOS 14.0, *), model.rowFrame.width > 0,
+           let shader = DropletLens.maskShader(
+            rect: CGRect(x: f.minX - model.rowFrame.minX, y: f.minY - model.rowFrame.minY,
+                         width: f.width, height: f.height),
+            refraction: (h: 10 * model.press, amount: -14 * model.press),
+            layerSize: model.rowFrame.size) {
+            CandidateBarView.ghostSnapshotRow(items: model.items, windowStart: model.windowStart)
+                .layerEffect(shader, maxSampleOffset: DropletLens.maxSampleOffset)
+                .offset(x: model.rowFrame.minX, y: model.rowFrame.minY)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// 表面处理: 容器色 + 上缘高光(Kyant0 onDrawSurface/Highlight,强度随按压)
+    @ViewBuilder private func blobDressing(_ f: CGRect) -> some View {
+        Capsule()
+            .fill(.white.opacity(0.08 * model.press))
+            .overlay {
+                Capsule().stroke(
+                    LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.05)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 1)
+                    .opacity(0.3 + 0.5 * model.press)
+            }
+            .frame(width: f.width, height: f.height)
+            .offset(x: f.minX, y: f.minY)
     }
 }
 
@@ -593,7 +589,6 @@ final class CandidateWindowController {
     private var overlayHosting: NSHostingView<DropletOverlayView>?
     private var onSelect: (Int) -> Void = { _ in }
     private var onToggleExpand: () -> Void = {}
-    private var lastGhostKey = ""
 
     /// 候选窗玻璃条 frame 变化回调(nil = 隐藏);伴随面板据此重新浮动定位
     var onFrameChange: ((NSRect?) -> Void)?
@@ -696,35 +691,14 @@ final class CandidateWindowController {
         panel.setFrameOrigin(NSPoint(x: barOrigin.x - Self.marginH, y: barOrigin.y - Self.marginV))
         panel.orderFront(nil)
 
-        // 水滴布局输入 + 幽灵行快照(内容变化才重拍)
+        // 水滴布局输入(折射由 overlay 的 Metal layerEffect 直接做)
         droplet.suppressed = expanded || translation != nil || isLoading
-        droplet.applyLayout(count: items.count, windowStart: windowStart,
+        droplet.applyLayout(items: items, windowStart: windowStart,
                             barGlassHeight: barSize.height, selectedIndex: selectedIndex)
-        let key = items.map(\.text).joined(separator: "\u{1}") + "|\(windowStart)"
-        if key != lastGhostKey, DropletLens.isAvailable {
-            lastGhostKey = key
-            refreshGhostSnapshot(items: items, windowStart: windowStart)
-        }
 
         let barFrame = panel.frame.offsetBy(dx: Self.marginH, dy: Self.marginV)
         onFrameChange?(NSRect(origin: barFrame.origin, size: barSize))
         DebugLog.log("候选窗显示 bar=\(NSStringFromSize(barSize)) origin=\(NSStringFromPoint(barOrigin)) caret=\(NSStringFromRect(caretRect)) 网格=\(expanded)")
-    }
-
-    /// 幽灵行快照(强调色层,CI 折射的内容源;与正常行逐像素同布局)。IMK 回调在主线程,assumeIsolated 满足 ImageRenderer 的隔离要求
-    private func refreshGhostSnapshot(items: [CandidateItem], windowStart: Int) {
-        let model = CandidateDropletModel.shared
-        let scheme: ColorScheme = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
-        let cg = MainActor.assumeIsolated {
-            let renderer = ImageRenderer(content: CandidateBarView
-                .ghostSnapshotRow(items: items, windowStart: windowStart)
-                .environment(\.colorScheme, scheme))
-            renderer.scale = 2
-            return renderer.cgImage
-        }
-        model.ghostImage = cg
-        model.snapshotScale = 2
-        DebugLog.log("幽灵行快照 \(cg.map { "\($0.width)x\($0.height)" } ?? "失败")")
     }
 
     func hide() {

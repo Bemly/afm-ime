@@ -10,11 +10,34 @@ security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_ID" || SIGN_I
 
 swift build -c release
 
+# Metal shader → default.metallib(候选条水滴折射 layerEffect)。
+# 需要 Xcode 的 Metal Toolchain(Xcode 26+ 组件缺失时: DEVELOPER_DIR=<Xcode> xcodebuild -downloadComponent metalToolchain);
+# 缺失/编译失败则打包照常,水滴退化为纯玻璃无折射。
+XDEV="${DEVELOPER_DIR:-}"
+if [ -z "$XDEV" ]; then
+  for c in /Applications/Xcode.app/Contents/Developer /Applications/Xcode-beta.app/Contents/Developer; do
+    [ -d "$c" ] && XDEV="$c" && break
+  done
+fi
+METALLIB=""
+if [ -n "$XDEV" ] && [ -d "$XDEV" ]; then
+  if DEVELOPER_DIR="$XDEV" xcrun -sdk macosx metal -c Metal/DropletLens.metal -o build/DropletLens.air \
+     && DEVELOPER_DIR="$XDEV" xcrun -sdk macosx metallib build/DropletLens.air -o build/default.metallib; then
+    METALLIB="build/default.metallib"
+    echo "Metal shader 编译完成: default.metallib (DEVELOPER_DIR=$XDEV)"
+  else
+    echo "!! Metal shader 编译失败——水滴将无折射。需要 Xcode + Metal Toolchain 组件"
+  fi
+else
+  echo "!! 未找到 Xcode(DEVELOPER_DIR 未设且 /Applications 无 Xcode*.app)——跳过 Metal shader,水滴将无折射"
+fi
+
 APP="build/AFM拼音.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/afm-input "$APP/Contents/MacOS/AFMInput"
 cp Data/dict.bin "$APP/Contents/Resources/dict.bin"
+[ -n "$METALLIB" ] && cp "$METALLIB" "$APP/Contents/Resources/default.metallib"
 [ -f Data/icon.tiff ] && cp Data/icon.tiff "$APP/Contents/Resources/icon.tiff"
 [ -f Data/appicon.tiff ] && cp Data/appicon.tiff "$APP/Contents/Resources/appicon.tiff"
 
