@@ -29,7 +29,8 @@ struct TranslationDisplay {
 
 /// 水滴几何与渲染模型(视图直写 @Published 局部刷新,不经 props 每帧往返 InputController)。
 /// frames = 各候选 cell frame("candBar" 坐标,点;OnGeometryChange 回写);
-/// 拖拽期间不滑窗口(钳制在可见 8 个内)——rootView 重建会中断进行中的手势。
+/// 拖拽模型(水滴不动 bar 动): 水滴钉在抓取位,行内容从水滴下滑过,
+/// 松手把当前在水滴正下方的内容吸附上屏;窗口起点拖拽中由模型自调(dragWindowStart)。
 final class CandidateDropletModel: ObservableObject {
     /// 单例(面板/覆盖层/控制器多视图引用同一份几何与折射输出)
     static let shared = CandidateDropletModel()
@@ -50,6 +51,12 @@ final class CandidateDropletModel: ObservableObject {
     @Published var dragFraction: Double? = nil    // 拖拽中的连续全局下标(nil = 非拖拽)
     @Published var press: Double = 0              // 按压进度 0-1
     @Published var velocity: Double = 0           // 平滑拖拽速度(归一,驱动挤压拉伸)
+    @Published var rowOffset: CGFloat = 0         // 行内容滑动偏移(拖拽中;幽灵层由 shader shift 同步)
+    @Published var dragWindowStart = 0            // 拖拽中的滑动窗口起点(bar 视图拖拽期间用它)
+    private var dragBaseFraction: Double = 0      // 抓取时的锚点位
+    private var windowBase = 0                    // 抓取时的窗口起点
+    private var pitch: CGFloat = 60               // 抓取处 cell 宽(拖拽位移换算)
+    private var pinnedFrame: CGRect?              // 抓取时的水滴静止 frame(拖拽期间钉住)
 
     // 产出(overlay 直接渲染)
     @Published var blobFrame: CGRect? = nil       // 水滴最终 frame(含缩放/挤压)
@@ -74,6 +81,8 @@ final class CandidateDropletModel: ObservableObject {
         dragFraction = nil
         press = 0
         velocity = 0
+        rowOffset = 0
+        pinnedFrame = nil
         recompute()
     }
 
@@ -91,20 +100,43 @@ final class CandidateDropletModel: ObservableObject {
     func beginDrag(atX x: CGFloat, fallback: Int) {
         press = 1
         velocity = 0
-        dragFraction = fraction(at: x) ?? Double(fallback)
+        let base = fraction(at: x) ?? Double(fallback)
+        dragBaseFraction = base
+        dragFraction = base
+        windowBase = windowStart
+        dragWindowStart = windowStart
+        pitch = interpolatedFrame(at: base)?.width ?? 60
+        // 水滴钉在抓取位(拖拽期间只有按压缩放,不位移)
+        if let cell = interpolatedFrame(at: base) {
+            let restH = min(barGlassHeight * 0.875, barGlassHeight - 2)
+            let restW = cell.width + 6
+            pinnedFrame = CGRect(x: cell.midX - restW / 2, y: cell.midY - restH / 2,
+                                 width: restW, height: restH)
+        }
         recompute()
     }
 
     func drag(by dx: CGFloat) {
-        guard let base = dragFraction, let f = currentCellFrame, f.width > 1 else { return }
-        let target = base + Double(dx) / Double(f.width)
-        let lo = Double(windowStart)
-        let hi = Double(max(windowStart, min(windowStart + 7, itemCount - 1)))
-        let clamped = max(lo, min(hi, target))
-        let inst = (clamped - base) * 3.0
+        guard dragFraction != nil, pitch > 1 else { return }
+        // 水滴固定: bar 向手拖方向滑动,水滴正下方的内容位 = 锚点 - 位移/格宽(左拖 → 更高候选经过)
+        let anchor = max(0, min(Double(itemCount - 1), dragBaseFraction - Double(dx) / Double(pitch)))
+        // 窗口跟随锚点(把锚点保持在窗口中部槽位),换算行偏移补偿窗口跳变
+        var ws = windowBase
+        while anchor < Double(ws + 2), ws > 0 { ws -= 1 }
+        while anchor > Double(ws + 5), ws + 8 < itemCount { ws += 1 }
+        dragWindowStart = ws
+        rowOffset = CGFloat(dx) - CGFloat(ws - windowBase) * pitch
+        let inst = (anchor - dragFraction!) * 3.0
         velocity = velocity * 0.65 + max(-1, min(1, inst)) * 0.35
-        dragFraction = clamped
-        recompute()
+        dragFraction = anchor
+        // 水滴钉在原地(仅按压缩放 + 速度挤压)
+        if let pinned = pinnedFrame {
+            let pressScale = 1 + 0.35 * press
+            let vv = max(-1, min(1, velocity))
+            let sx = pressScale / (1 - max(-0.2, min(0.2, vv * 0.075)))
+            let sy = pressScale * (1 - max(-0.2, min(0.2, vv * 0.025)))
+            blobFrame = pinned.scaledAboutCenter(sx: sx, sy: sy)
+        }
     }
 
     func endDrag() {
@@ -112,6 +144,8 @@ final class CandidateDropletModel: ObservableObject {
         press = 0
         velocity = 0
         dragFraction = nil
+        rowOffset = 0
+        pinnedFrame = nil
         recompute()
         onDrop?(f)
     }
@@ -169,6 +203,7 @@ final class CandidateDropletModel: ObservableObject {
 
     /// 重算水滴几何(折射由 overlay 的 layerEffect 直接在幽灵层上做,模型只管几何)
     func recompute() {
+        if dragFraction != nil { return } // 拖拽中: 水滴钉在抓取位,几何由 drag(by:) 维护
         guard !suppressed,
               let cell = interpolatedFrame(at: dragFraction ?? Double(selectedIndex)) else {
             blobFrame = nil
@@ -240,21 +275,26 @@ struct CandidateBarView: View {
     // MARK: 候选条(滑动窗口;水滴渲染在面板层 DropletOverlayView,这里只管内容与手势)
 
     private var barView: some View {
-        let end = min(windowStart + 8, items.count)
-        let window = windowStart < end ? Array(items[windowStart..<end]) : []
+        let dragging = droplet.dragFraction != nil
+        let ws = dragging ? droplet.dragWindowStart : windowStart
+        let end = min(ws + 8, items.count)
+        let window = ws < end ? Array(items[ws..<end]) : []
         return HStack(spacing: 3) {
-            ForEach(window) { item in
-                CandidateCell(item: item,
-                              number: item.isAI ? "\u{F8FF}" : "\(item.index - windowStart + 1)",
-                              active: item.index == selectedIndex)
-                    .onTapGesture { onSelect(item.index) }
-                    .transition(Self.slideTransition(forward: slideForward))
-                    .modifier(FrameReporter(index: item.index, model: droplet))
+            HStack(spacing: 3) {
+                ForEach(window) { item in
+                    CandidateCell(item: item,
+                                  number: item.isAI ? "\u{F8FF}" : "\(item.index - ws + 1)",
+                                  active: item.index == selectedIndex)
+                        .onTapGesture { onSelect(item.index) }
+                        .transition(Self.slideTransition(forward: slideForward))
+                        .modifier(FrameReporter(index: item.index, model: droplet))
+                }
             }
+            .offset(x: dragging ? droplet.rowOffset : 0) // 拖拽 = 行内容从固定水滴下滑过(水滴不动 bar 动)
             expandChevron("▾")
         }
         .modifier(RowFrameReporter(model: droplet))
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: windowStart)
+        .animation(dragging ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: ws)
         .contentShape(Rectangle())
         .gesture(dragGesture)
     }
@@ -414,8 +454,10 @@ struct DropletOverlayView: View {
             rect: CGRect(x: f.minX - model.rowFrame.minX, y: f.minY - model.rowFrame.minY,
                          width: f.width, height: f.height),
             refraction: (h: 10 * model.press, amount: -14 * model.press),
-            layerSize: model.rowFrame.size) {
-            CandidateBarView.ghostSnapshotRow(items: model.items, windowStart: model.windowStart)
+            layerSize: model.rowFrame.size,
+            contentShift: -model.rowOffset) { // 内容位移进 shader 采样: 折射层与 bar 同步滑动,水滴固定
+            let ws = model.dragFraction != nil ? model.dragWindowStart : model.windowStart
+            CandidateBarView.ghostSnapshotRow(items: model.items, windowStart: ws)
                 .layerEffect(shader, maxSampleOffset: DropletLens.maxSampleOffset)
                 .offset(x: model.rowFrame.minX, y: model.rowFrame.minY)
                 .allowsHitTesting(false)
