@@ -6,17 +6,20 @@ macOS 液态玻璃(Liquid Glass)风格中文拼音输入法,端侧 Apple Foundat
 
 ## 功能
 
-- **词典引擎**:rime-ice 词库(雾凇拼音,192 万词条:tencent 98w + base 55w + ext 34w + 8105 单字),编译为二进制 `dict.bin`,mmap 零拷贝加载(<1ms),单次查询 ~1ms
+- **词典引擎**:多源词库 **349.7 万词条**,编译为二进制 `dict.bin`,mmap 零拷贝加载(<1ms),单次查询 ~1ms
+  - rime-ice 雾凇拼音(tencent 98w + base 55w + ext 34w + 8105 单字)
+  - 萌娘百科(mw2fcitx 月更)12.9w / 中文维基 167w / Minecraft Wiki 1.1w / 蔚蓝档案 / THUOCL 9.4w / ali-words 黑话 / 自维护梗合集 3300 词(无拼音源编译期自动注音)
 - **液态玻璃候选窗**:NSPanel + NSGlassEffectView(macOS 26+ 真·Liquid Glass),跟随光标,暗色/亮色自适应
 - **FM 增强(端侧,隐私安全)**:
   - *候选重排*:打字停顿 ~0.4s 后,端侧模型根据上文把最合适的候选置顶(标 Apple 标志)
   - *整句预测*:长拼音词典覆盖不住时,光标处显示"整句预测中"占位,模型输出整句后原位替换
-- **模糊拼音切分**:音节树 + 最多 12 路切分枚举,尾部不完整音节实时匹配
+- **拼音切分与模糊音**:音节树 + 最多 12 路切分枚举,尾部不完整音节实时匹配;模糊拼音 zh/z、ch/c、sh/s、an/ang、en/eng、in/ing(含 ian↔iang、uan↔uang)双向模糊,精确拼音候选永远优先
 
 ## 构建 / 安装
 
 ```sh
 swift build -c release
+scripts/build_dict.sh       # 词库源变更后全量重编 Data/dict.bin(rime-ice+外部词库+梗合集)
 scripts/package.sh          # 产出 build/AFM拼音.app + build/AFM拼音安装器.app
 open build/AFM拼音安装器.app # GUI:一键 安装→启用→选中
 ```
@@ -27,9 +30,10 @@ open build/AFM拼音安装器.app # GUI:一键 安装→启用→选中
 
 ## 使用
 
-- `Ctrl+Space` 或菜单栏切换到 AFM拼音
-- 打拼音 → 数字 `1-9` 选词 / `空格` 上屏高亮候选 / `回车` 上屏拼音原文
-- `↑↓` 移动高亮,`=`/`-` 翻页,`Esc` 取消组词
+- `Ctrl+Space` 或菜单栏切换到 AFM拼音;**轻点 `Shift` 中英切换**(系统级监听、全部应用生效,跨重启记忆;英文模式无候选框、标点半角直通)
+- 中文模式:打拼音 → 数字 `1-9` 选词 / `空格` 上屏高亮候选 / `回车` 上屏拼音原文
+- `↑↓←→` 移动高亮,`=`/`-` 翻页,候选条 `◂▸` 鼠标点击翻页,`Esc` 取消组词
+- 中文标点自动全角：，。；：？！（）【】「」《》、·～,以及 `Shift+-`→——、`Shift+6`→……、`Shift+4`→￥;引号 `'`→‘’、`Shift+'`→“”,均成对交替(`-`/`=`/空格/数字保持半角)
 - FM 整句:长拼音停顿后出现 ✦ 整句候选,空格直接上屏
 
 ## Debug
@@ -46,10 +50,12 @@ Sources/
 ├── IMECore/        # 词库(DictStore mmap)、拼音切分、候选引擎、TIS 安装器、debug 日志
 ├── AFMInput/       # 输入法主体(IMKServer/InputController/液态玻璃候选窗/FM 重排)+ 安装 CLI
 ├── AFMInstaller/   # 安装器 GUI(安装→一键注销→重登完成启用)
-├── DictCompiler/   # rime-ice dict.yaml → dict.bin 编译器
-└── DictBench/      # 词库加载/查询基准
-vendor/rime-ice/    # 词库来源(sparse clone)
-Data/dict.bin       # 编译产物(git 忽略,dictcompiler 重新生成)
+├── DictCompiler/   # 多源词库 → dict.bin 编译器(rime yaml/撇号拼音/词频 TSV/源码提取/markdown)
+└── DictBench/      # 词库加载/查询基准(含各外部词库源回归查询)
+vendor/             # 词库源:rime-ice + 萌娘百科/zhwiki/minecraft/蔚蓝档案/THUOCL/ali-words
+Experiments/        # FM 框架测绘、梗合集词库等实验材料
+scripts/build_dict.sh  # 全量词库编译入口
+Data/dict.bin       # 编译产物(git 忽略,build_dict.sh 重新生成)
 ```
 
 ## 性能(本机 macOS 27 / M 系列)

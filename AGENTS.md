@@ -18,8 +18,8 @@ macOS 27 液态玻璃(Liquid Glass)风格的中文拼音输入法,调用端侧 A
 ```
 AFM拼音.app (安装到 ~/Library/Input Methods/)
 ├── 引擎层(纯 Swift,SPM,无第三方依赖)
-│   ├── 词库编译器: rime-ice dict.yaml → 二进制 dict.bin(192.2 万条/79MB,mmap 加载实测 <1ms)
-│   ├── 拼音切分: 逆序 DP 枚举 ≤12 路音节切分,尾音节允许不完整(模糊音 zh/z、ch/c、sh/s、v→ü 尚未实现)
+│   ├── 词库编译器: rime-ice + 外部词库(萌娘/zhwiki/mcwiki/BA/THUOCL/ali-words/梗合集) → 二进制 dict.bin(349.7 万条/145MB,mmap 加载 <1ms,scripts/build_dict.sh 一键全量重编)
+│   ├── 拼音切分: 逆序 DP 枚举 ≤12 路音节切分,尾音节允许不完整;模糊音 zh/z ch/c sh/s + 前后鼻音已实现(查询期变体展开,精确优先;v→ü 未实现)
 │   └── 候选生成: 多路切分 + mmap 二分前缀查表,按词频权重打分合并(纯查表、按词输入、不做 Viterbi 组句,见决策记录)
 ├── FM 层(端侧大模型,当前仅进程内单通道)
 │   ├── 进程内 import FoundationModels(SystemLanguageModel),每次新建无状态 session
@@ -46,6 +46,7 @@ AFM拼音.app (安装到 ~/Library/Input Methods/)
 
 ```sh
 swift build -c release
+scripts/build_dict.sh   # 词库源变更后全量重编 Data/dict.bin(rime-ice+外部词库+梗合集,~22s)
 scripts/package.sh   # 组装 .app bundle + codesign -fs -
 # 安装: 拷贝到 ~/Library/Input Methods/,launchd 按需拉起,系统设置 → 键盘 → 输入法 → + → 简体中文 → AFM拼音
 ```
@@ -65,7 +66,9 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - session 复用会携带 transcript 上下文(整句测试中受上文影响);**最终实现选择每次新建无状态 session**(创建仅 1ms,零 transcript 膨胀,语境改为每次 prompt 显式带光标前上文)
 - **结论**:FM 做不了逐键级(<100ms)的跟手响应,词典引擎负责跟手;FM 异步增强(0.3s 到达)完全可用
 
-## 词库数据(vendor/rime-ice/cn_dicts,已 sparse clone)
+## 词库数据(vendor/,已 clone/下载)
+
+### rime-ice 主库(vendor/rime-ice/cn_dicts,sparse clone)
 
 | 文件 | 词条数 | 拼音标注 |
 |---|---|---|
@@ -80,8 +83,27 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - 注音规则:rime 惯例 `nve/lve` 表示 üe;自动注音时多音字取字频比 >5% 的读音(rime 同款策略)
 - proto/bench_fm.swift:FM 进程内基准源码,可重复运行
 
+### 外部词库(2026-09-05 接入,全走 scripts/build_dict.sh)
+
+| 源 | vendor/ 文件 | 收录 | 格式 / 处理 |
+|---|---|---|---|
+| 萌娘百科(mw2fcitx 官方月更 release 20260812) | moegirl/moegirl.dict.yaml | 129,095 | 无声调 rime yaml(词\t拼音),权重缺省→100;moetype 是其下游整理版,未用 |
+| 中文维基(fcitx5-pinyin-zhwiki 0.3.0 zhwiki-20260416) | zhwiki/zhwiki.dict.yaml | 1,673,005 | 无声调 rime yaml,167 万行 → 编译器流式逐行解析防内存爆炸 |
+| Minecraft Wiki | fcitx5-pinyin-minecraft/mc-cn.raw | 11,014 | 官方脚本抓 zh.minecraft.wiki API 生成(venv: pypinyin+opencc);release 的 .dict 是 libime 二进制不可用 |
+| 蔚蓝档案 | BlueArchive-PinyinDictionary/ALL IN ONE/rime.txt | 301 | 撇号拼音 `qing'hui'shi`+权重;各子文件编码不一(有 UTF-16),只取 UTF-8 的 ALL IN ONE 合并版 |
+| THUOCL 清华开放中文词库 | THUOCL/data/THUOCL_*.txt(11 个) | 93,647 | 词频 TSV `词 \t 频次`,自动注音;权重=clamp(频次,1..100_000) |
+| ali-words 黑话 | ali-words/src/words.ts | 668 | TS 源码正则提取引号内 CJK 词,自动注音,权重 100 |
+| 梗合集(自维护) | Experiments/梗合集-关键词拆散.md | 3,300 | markdown 表第一列:顿号拆分、去两端 ⚡/emoji 装饰、仅收纯 CJK ≥2 字,自动注音,权重 100 |
+| 空耳词库(自维护) | Experiments/空耳词库.txt | 15 | 手工标注拼音(词\tq'y\t权重),apostropheTxt 模式;拉丁混排词(如 saki酱)给全拼键位 sa'ki'jiang |
+
+- **权重校准基准**:rime-ice base P50=480 / P90=15,680 / P99=20.3 万;外部词库一律压在 100 档(与 tencent 同级)或 clamp 10 万以内,保证不压常用词(dictbench 实测:taikula 中 泰裤辣 排在 太酷啦/太苦啦 之后 ✅)
+- 全量重编 21-22s / 峰值内存 ~1.7GB;dict.bin 349.7 万条 / 145MB;热循环查询平均 0.14-0.61ms
+- **mc 词库坑**:官方 fetch.py 的 `get_all_titles_in_variant` 对每个带汉字页面单独发一次 variant API 请求(3 万页=3 万请求,数小时)——用 `get_all_titles` 整表翻页(~60 请求),繁→简由 convert.py 里 opencc t2s 兜底;`opencc` 要装官方 C++ 绑定版,`opencc-python-reimplemented` 有 .json 后缀双拼 bug
+- DictBench 固化了各源回归查询(kulipa/xiajiehejin/fumo/weilandangan/qinghuishi/zifuchuan/huashetianzu/funeng/zundujiadu/taikula/caijiuduolian/hongwen/malou),重编词库后跑一遍即验收
+
 ## 决策记录
 
+- **每次功能改动必须 git 提交**(用户规矩,2026-09-05):按仓库既有风格 feat:/fix:/docs:/refactor:/chore: + 中文详述,相关改动分批提交,不让工作区积压多个功能
 - 不装 Xcode(CLT 可编译全部所需);若撞到必须 Xcode 的坑,暂停向用户提出选项
 - rime-ice 词库下载已获用户同意(用户指定必须用 rime 词库)
 - FM 不可用/无权限/被安全层拦截时静默返回 nil → 直接纯词典模式,不阻塞输入;fm CLI 子进程回退通道预留但当前未接线
@@ -89,6 +111,9 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - **按词输入、纯查表、不做 Viterbi/词图整句组句**:CandidateEngine 只做多路切分 + 前缀查表 + 权重合并;跨词整句交给 FM 用途②兜底
 - **模糊音(zh/z、ch/c、sh/s、v→ü)尚未实现**:PinyinSegmenter 目前只接受标准全拼音节,是明确的后续项
 - FM session 每次新建、不带 transcript;上文由 InputController 取光标前 ≤60 字随请求显式传入
+- **外部词库接入(2026-09-05,用户指定 6 源 + 自维护梗合集)**:DictCompiler 新增 5 种输入模式(--rime 无声调 yaml / --apostrophe 撇号拼音 txt / --freq 词频 TSV / --wordlist 源码提取 / --md-keywords markdown 首列),全在 scripts/build_dict.sh 固化;纯拉丁词与含 XX 占位符词条不收(拼音不可键入);同 key 候选超 exactCap=32 时低权重词会被截断,长尾仍由 FM 整句兜底
+- **模糊拼音(2026-09-05)**:选**查询期变体展开**而非 rime 式编译期 derive——不动 dict.bin(省 ~15% 体积),规则改起来不用重编词库。CandidateEngine.candidates() 为前 3 条切分路径生成模糊变体键一并查询:zh↔z ch↔c sh↔s + an↔ang en↔eng in↔ing(按后缀匹配,ian↔iang uan↔uang 自然覆盖);每键变体含原键封顶 8(笛卡尔积截断),模糊命中 ×0.5 保证精确拼音候选优先;模糊查询用小 extCap/scanBudget(48/2 万)控耗时,热循环实测零退化(0.15ms)。简拼(首字母 abbrev)与自动纠错(移位容错,与「李娜/去哪」类词有冲突需调)未做
+- **中英模式与全角标点(2026-09-05,踩坑链完整版)**:① IMK **默认只投递 keyDown**,flagsChanged 必须覆写 `recognizedEvents(_:)` 返回 `[.keyDown, .flagsChanged]` 才会送达(AppKit 应用可达,fcitx5-macos 同款);② **Electron/Chromium 系应用(VSCode/Chrome/ZCode)根本不向输入法转发修饰键事件**,IMK 路线在这些应用里是死路(recognizedEvents 声明也无效,实测 0 事件);③ **方向键 keyDown 自带 function|numericPad 修饰位(0xA00000)**,mods 判定前必须剔除,否则 ←/→/↑/↓ 全被当"带修饰键"放行(dac0262 的 ↑↓ 修复因此从未真正生效);④ Shift 中英切换最终方案 = **ShiftModeMonitor(CGMEventTap .cgSessionEventTap + listen-only)全局监听**,IME 进程创建 tap 实测无需 TCC 授权(输入法属受信输入子系统);若创建失败在 activateServer 重试。切模式时组词先上屏拼音原文;模式写 UserDefaults(key AFMEnglishMode)跨重启。英文模式 handle 全直通;中文模式标点映射全角(，。；：？！（）【】「」《》、·～,`$`→￥、`_`→——、`^`→……),引号 `'`→''、`"`→"" 成对交替,`-`/`=`/空格/数字保持半角;**部分客户端 shift+标点的 charactersIgnoringModifiers 不带上档效果**(shift+1 给 '1'),handle 里用 shiftedSymbols 表还原(shift+数字因此不触发选词);候选条 ◂/▸ 鼠标点击翻页(onPage 回调)。注意:合成按键(CUAGEventPostToPid)不经过系统事件流,session tap 看不到,只能真机键盘验证
 
 ## 安装要点(M2 实测踩坑)
 
@@ -128,6 +153,7 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 
 ## M2 收官结论(2026-09-04,打字链路实测可用)
 
+- **重装/重启输入法标准顺序**(2026-09-05 踩坑:launchd 会在 killall 后、open 前复活进程,复活窗口拿到的可能是旧 bundle,且日志截断会与存活进程的句柄错位):**先换盘(cp)→ killall → `pgrep -x AFMInput` 确认死透(残留就 pkill -9)→ open**;启动后 grep 日志必须看到 `输入法启动 build=` 与 `ShiftTap: 监听已启动` 两行才算部署完成;调试日志文件清理用 mv 移走而不是 `: >` 截断
 - **包名定稿:`moe.bemly.inputmethod.AfmIME`**(mode:`moe.bemly.inputmethod.AfmIME.afmpinyin.hans`;代码常量见 IMECore/Installer.swift,Info.plist 与 InfoPlist.strings 必须与之逐字一致)。规矩:id 必须含 `inputmethod` 段**且段后必须有名字**——以 `inputmethod` 结尾(如 moe.bemly.inputmethod)时添加选择器根本不显示它
 - **全新 id 首次安装流程**(缺一不可):
   1. bundle 装入 `~/Library/Input Methods/` + defaults 写 base+mode 启用条目
