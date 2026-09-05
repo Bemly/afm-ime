@@ -450,10 +450,8 @@ final class InputController: IMKInputController {
         let context = Self.contextBeforeCaret(client)
         let texts = candidates.prefix(Self.perPage).map(\.text)
 
-        // 整句判定: 无候选,或输入较长而最佳候选的拼音覆盖不足一半(词典切不出整句)
-        let topCover = candidates.first?.pinyin.count ?? 0
-        let needSentence = texts.isEmpty
-            || (snapshotRaw.count >= 8 && topCover < snapshotRaw.count / 2)
+        // 整句判定: 无候选,或输入较长(≥8 字母)——引擎组句是即时草稿,长输入始终触发 FM 纠正
+        let needSentence = (texts.isEmpty && raw.count >= 4) || raw.count >= 8
         if texts.count <= 1 && !needSentence {
             DebugLog.log("FM 跳过: 候选不足")
             return

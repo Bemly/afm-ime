@@ -38,13 +38,14 @@ public final class CandidateEngine {
         }
 
         let segs = segmenter.segment(rawInput)
+        var primaryFullExact = false // 主路径完整键在词库有整句短语 → 不做词格组句
         for (si, seg) in segs.enumerated() {
             let key = seg.syllables.joined(separator: " ")
             let keyFactor = seg.trailingPartial ? 0.45 : 1.0
             // 模糊拼音: 仅展开前 3 条切分路径,每键变体含原键封顶 8;
             // 模糊命中 ×0.5,保证"首选项是准确拼音"(rime derive 的查询期等价物)
             var queries: [(key: String, factor: Double)] = [(key, 1.0)]
-            if si < 3 {
+            if si == 0 {
                 for v in Self.fuzzyKeys(syllables: seg.syllables) where v != key {
                     guard queries.count < 8 else { break }
                     queries.append((v, 0.5))
@@ -76,18 +77,21 @@ public final class CandidateEngine {
                     fuzzyVariants.append("缩写:" + k)
                 }
             }
+            var foundExactMain = false
             for q in queries {
                 let fuzzy = q.factor < 1.0
                 for hit in store.query(prefix: q.key,
                                        exactCap: 32,
                                        extCap: fuzzy ? 48 : 256,
                                        scanBudget: fuzzy ? 20_000 : 60_000) {
+                    if si == 0, q.factor == 1.0, hit.key == key { foundExactMain = true }
                     let isExact = hit.key == q.key
                     let score = Double(hit.weight) * (isExact ? 1.0 : 0.6) * keyFactor * q.factor
                     if let old = best[hit.word], old.score >= score { continue }
                     best[hit.word] = Candidate(text: hit.word, pinyin: hit.key, score: score)
                 }
             }
+            if si == 0, foundExactMain { primaryFullExact = true }
             // 渐进前缀(仅纯全拼路径;因子 0.1^层级,整句/全键词永远排在渐进单词前):
             // 长句打全拼但词库无对应短语时,给出覆盖开头音节的词(nishiyizhimaoniang → 你是一只猫娘(整句) > 你是)
             // 跳过末位为单字母"音节"的层级(元素符号键污染切分表,nhao 不得退化到 n)
@@ -106,11 +110,80 @@ public final class CandidateEngine {
                 }
             }
         }
+        // 整句组词: 主路径纯全拼、词库无整句短语时,词格 DP 用词典词覆盖全部音节
+        // (nishiyizhiwanjuxiong → 你是一只玩具熊 = 你+是+一只+玩具+熊),排在渐进单词前,FM ✦ 到达后置顶
+        if !primaryFullExact, let seg0 = segs.first, !seg0.abbrevFlags.contains(true),
+           seg0.syllables.count >= 2, seg0.syllables.count <= 12,
+           let sent = composeSentence(syllables: seg0.syllables) {
+            if let old = best[sent.text], old.score >= sent.score {
+                // 已有同文候选(如词典整句)保持
+            } else {
+                best[sent.text] = sent
+            }
+        }
         let out = Array(best.values.sorted { $0.score > $1.score }.prefix(limit))
         DebugLog.log("引擎[\(rawInput)] 切分=\(segs.map { $0.syllables.joined(separator: "'") }.joined(separator: " / ")) → \(out.count) 条"
             + (fuzzyVariants.isEmpty ? "" : " 模糊=\(fuzzyVariants.joined(separator: ","))")
             + ", \(String(format: "%.2f", -t0.timeIntervalSinceNow * 1000))ms")
         return out
+    }
+
+    /// 整句组词(词格 DP/Viterbi): 在音节序列上用词典词覆盖全部音节,
+    /// 目标 max 平均(log(w) + 词长加成min(字数−1,3))(按词数归一,多字词稳定压过同音高频单字组合,
+    /// zhwiki 长标题也抢不过自然组句);得分 = exp(平均 logW);FM ✦ 到达后置顶纠同音
+    func composeSentence(syllables: [String]) -> Candidate? {
+        let n = syllables.count
+        guard n >= 2, n <= 12 else { return nil }
+        var spanCache: [String: (word: String, logW: Double)?] = [:]
+        func bestWord(_ i: Int, _ j: Int) -> (word: String, logW: Double)? {
+            let key = syllables[i..<j].joined(separator: " ")
+            if let c = spanCache[key] { return c }
+            let hit = store.query(prefix: key, exactCap: 4, extCap: 1, scanBudget: 5_000)
+                .first { $0.key == key } // 该音节段权重最高的词典词
+            let r: (word: String, logW: Double)? = hit.map {
+                ($0.word, log(Double($0.weight) + 1) + Double(min($0.word.count - 1, 3)))
+            }
+            spanCache[key] = r
+            return r
+        }
+        // bestTotal[j][c] = 用 c 个词覆盖前 j 个音节的最大 ΣlogW;回溯表同维
+        var bestTotal = Array(repeating: [Double](repeating: -.infinity, count: n + 1), count: n + 1)
+        var backWord = Array(repeating: [String](repeating: "", count: n + 1), count: n + 1)
+        var backStart = Array(repeating: [Int](repeating: -1, count: n + 1), count: n + 1)
+        bestTotal[0][0] = 0
+        for j in 1...n {
+            for i in (0..<j).reversed() {
+                guard let r = bestWord(i, j) else { continue }
+                for c in 0...(j - 1) where bestTotal[i][c] > -.infinity {
+                    let t = bestTotal[i][c] + r.logW
+                    if t > bestTotal[j][c + 1] {
+                        bestTotal[j][c + 1] = t
+                        backWord[j][c + 1] = r.word
+                        backStart[j][c + 1] = i
+                    }
+                }
+            }
+        }
+        var bestAvg = -Double.infinity, bestC = 0
+        for c in 1...n where bestTotal[n][c] > -.infinity {
+            let avg = bestTotal[n][c] / Double(c)
+            if avg > bestAvg { bestAvg = avg; bestC = c }
+        }
+        guard bestC > 0 else { return nil }
+        var words: [String] = []
+        var j = n, c = bestC
+        while j > 0, c > 0 {
+            let i = backStart[j][c]
+            guard i >= 0 else { return nil }
+            words.insert(backWord[j][c], at: 0)
+            j = i
+            c -= 1
+        }
+        let text = words.joined()
+        guard !text.isEmpty else { return nil }
+        return Candidate(text: text,
+                         pinyin: syllables.joined(separator: " "),
+                         score: exp(bestAvg))
     }
 
     /// 单音节的模糊变体: zh↔z ch↔c sh↔s + 前后鼻音 an↔ang en↔eng in↔ing
