@@ -108,6 +108,13 @@ final class InputController: IMKInputController {
         // 方向键 keyDown 自带 function|numericPad 修饰位(0xA00000),须剔除后再判定,
         // 否则 ←/→/↑/↓ 全被当成"带修饰键"放行给应用(光标移动而非切换候选)
         let meaningful = mods.intersection([.shift, .control, .option, .command, .capsLock])
+        // ⌥;(keyCode 39): 打开系统「显示表情与符号」字符检阅器
+        if event.keyCode == 39, mods.contains(.option),
+           !mods.contains(.command), !mods.contains(.control) {
+            DebugLog.log("快捷键 ⌥; → 打开表情与符号")
+            NSApp.orderFrontCharacterPalette(nil)
+            return true
+        }
         // Shift 组合键的"轻点"判定在 ShiftModeMonitor(系统级)完成
         if !meaningful.isSubset(of: [.shift, .capsLock]) {
             DebugLog.log("放行带修饰键 key chars=\(event.charactersIgnoringModifiers ?? "?") mods=\(mods.rawValue)")

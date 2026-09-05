@@ -38,6 +38,10 @@ let queries = [
     "zongguo",                            // 模糊音 zh→z: 应出 中国(排在精确 zong 词之后)
     "sibie",                              // 模糊音 sh→s: 应出 识别
     "shen",                               // 模糊音 双向: 深/身 在前,生/声(×0.5)在后
+    "zhuaba",                             // 热词 爪巴
+    "pingguo",                            // 符号 苹果标志
+    "xiaolian",                           // 符号 ☻
+    "gun",                                // 符号 丨(与 滚 同键,权重排序)
 ]
 for q in queries {
     let tq = Date()

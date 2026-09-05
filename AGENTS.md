@@ -95,6 +95,8 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 | ali-words 黑话 | ali-words/src/words.ts | 668 | TS 源码正则提取引号内 CJK 词,自动注音,权重 100 |
 | 梗合集(自维护) | Experiments/梗合集-关键词拆散.md | 3,300 | markdown 表第一列:顿号拆分、去两端 ⚡/emoji 装饰、仅收纯 CJK ≥2 字,自动注音,权重 100 |
 | 空耳词库(自维护) | Experiments/空耳词库.txt | 15 | 手工标注拼音(词\tq'y\t权重),apostropheTxt 模式;拉丁混排词(如 saki酱)给全拼键位 sa'ki'jiang |
+| 热词与符号(自维护) | Experiments/热词与符号词库.txt | 22 | 手工标注:热词短语(爪巴/你牛大了/nya…)+ 苹果标志(U+F8FF,ping'guo/lin'qin/dianji 三键)+ ☻丨⌘⌥⇧⌃⇪↩⌫⎋ |
+| emoji(CLRD 中文注解) | vendor/emoji/emoji-zh.txt(scripts/build_emoji.py 生成) | ~6千 | unicode-org/cldr-json zh 注解(tts 名称+关键词)pypinyin 自动注音,权重 60;JSON 落 vendor 缓存,离线可重编;"apple" 不可键入(切分器只收合法音节串),苹果标志用 pingguo/linqin |
 
 - **权重校准基准**:rime-ice base P50=480 / P90=15,680 / P99=20.3 万;外部词库一律压在 100 档(与 tencent 同级)或 clamp 10 万以内,保证不压常用词(dictbench 实测:taikula 中 泰裤辣 排在 太酷啦/太苦啦 之后 ✅)
 - 全量重编 21-22s / 峰值内存 ~1.7GB;dict.bin 349.7 万条 / 145MB;热循环查询平均 0.14-0.61ms

@@ -48,6 +48,18 @@ MD_ARGS=()
 EAR_ARGS=()
 [ -f "Experiments/空耳词库.txt" ] && EAR_ARGS=(--apostrophe "Experiments/空耳词库.txt")
 
+# 热词与符号(手工标注拼音,不在时跳过)
+RECI_ARGS=()
+[ -f "Experiments/热词与符号词库.txt" ] && RECI_ARGS=(--apostrophe "Experiments/热词与符号词库.txt")
+
+# emoji 词库: CLDR 官方中文注解 → 拼音(缓存复用,首次需网络;生成失败仅告警不中断)
+if [ -x "$MCDIR/.venv/bin/python" ]; then
+  "$MCDIR/.venv/bin/python" scripts/build_emoji.py \
+    || echo "!! emoji 词库生成失败,本次编译不含 emoji"
+fi
+EMOJI_ARGS=()
+[ -f vendor/emoji/emoji-zh.txt ] && EMOJI_ARGS=(--apostrophe vendor/emoji/emoji-zh.txt)
+
 swift build -c release
 .build/release/dictcompiler \
   --cn-dicts vendor/rime-ice/cn_dicts \
@@ -59,4 +71,6 @@ swift build -c release
   --wordlist vendor/ali-words/src/words.ts \
   "${MD_ARGS[@]}" \
   "${EAR_ARGS[@]}" \
+  "${RECI_ARGS[@]}" \
+  "${EMOJI_ARGS[@]}" \
   --out Data/dict.bin
