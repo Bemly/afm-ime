@@ -52,6 +52,11 @@ EAR_ARGS=()
 RECI_ARGS=()
 [ -f "Experiments/热词与符号词库.txt" ] && RECI_ARGS=(--apostrophe "Experiments/热词与符号词库.txt")
 
+# 化学式/希腊字母(用户自维护,词\tq'y\t权重;元素符号单双字母键靠缩写直查命中)
+CHEM_ARGS=()
+[ -f "Experiments/化学式词库/化学式词库.txt" ] && CHEM_ARGS+=(--apostrophe "Experiments/化学式词库/化学式词库.txt")
+[ -f "Experiments/化学式词库/希腊字母词库.txt" ] && CHEM_ARGS+=(--apostrophe "Experiments/化学式词库/希腊字母词库.txt")
+
 # emoji 词库: CLDR 官方中文注解 → 拼音(缓存复用,首次需网络;生成失败仅告警不中断)
 if [ -x "$MCDIR/.venv/bin/python" ]; then
   "$MCDIR/.venv/bin/python" scripts/build_emoji.py \
@@ -72,5 +77,6 @@ swift build -c release
   "${MD_ARGS[@]}" \
   "${EAR_ARGS[@]}" \
   "${RECI_ARGS[@]}" \
+  "${CHEM_ARGS[@]}" \
   "${EMOJI_ARGS[@]}" \
   --out Data/dict.bin

@@ -33,7 +33,7 @@ final class InputController: IMKInputController {
         for c in liveControllers.allObjects {
             if !c.raw.isEmpty {
                 DebugLog.log("Shift 切换 → 先上屏拼音原文 '\(c.raw)'")
-                c.commit(c.raw, client: c.client())
+                c.flush(c.raw, client: c.client())
             }
             c.quoteOpenSingle = false
             c.quoteOpenDouble = false
@@ -55,13 +55,15 @@ final class InputController: IMKInputController {
     private var quoteOpenSingle = false                   // '' 成对交替
     private var quoteOpenDouble = false                   // "" 成对交替
 
-    /// 分段上屏撤销栈: 渐进前缀词上屏后,退格可删除已上屏词并恢复原拼音
+    /// 分段转换撤销栈: 渐进前缀词"转换"后整句仍为预编辑态,退格可回退该段
     private struct UndoEntry {
-        let committedText: String   // 已上屏的词
-        let previousRaw: String     // 上屏前的完整拼音
-        let remainderRaw: String    // 上屏后剩余的拼音
+        let segmentText: String     // 该段转换出的词
+        let previousRaw: String     // 该段转换前的完整拼音
+        let remainderRaw: String    // 转换后剩余的拼音
     }
     private var undoStack: [UndoEntry] = []
+    /// 已转换段(尚未真正上屏,整句保持预编辑下划线态,最终上屏时一并写入)
+    private var committedBuffer = ""
 
     private let candidateWindow = CandidateWindowController()
 
@@ -167,7 +169,7 @@ final class InputController: IMKInputController {
 
         case event.keyCode == 36 where composing: // 回车键(keyCode 36)→ 上屏拼音原文
             DebugLog.log("回车 → 上屏原文 '\(raw)'")
-            commit(raw, client: client)
+            flush(raw, client: client)
             return true
 
         case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 字符 '1'-'9' 选当前页(shift+数字=符号,不选词)
@@ -181,20 +183,14 @@ final class InputController: IMKInputController {
             return false
 
         case event.keyCode == 51 where composing: // 退格键(keyCode 51)
-            // 分段上屏后: 撤销最近一次渐进上屏(删除已上屏词,恢复完整拼音重新预测)
-            if let top = undoStack.last, raw == top.remainderRaw,
-               let textInput = client as? IMKTextInput {
-                let len = top.committedText.utf16.count
-                let sel = textInput.selectedRange()
-                if sel.location != NSNotFound, sel.location >= len {
-                    textInput.insertText(NSAttributedString(string: ""),
-                                         replacementRange: NSRange(location: sel.location - len, length: len))
-                    DebugLog.log("退格 → 撤销部分上屏 '\(top.committedText)',恢复 '\(top.previousRaw)'")
-                }
+            // 分段转换后: 回退最近一段(整句仍是预编辑态,纯内存操作,无需动应用文本)
+            if let top = undoStack.last, raw == top.remainderRaw {
+                committedBuffer = String(committedBuffer.dropLast(top.segmentText.count))
                 undoStack.removeLast()
                 raw = top.previousRaw
                 aiBoostText = nil
                 fmGeneration &+= 1
+                DebugLog.log("退格 → 撤销分段 '\(top.segmentText)',恢复 '\(raw)'")
                 refresh(client)
                 return true
             }
@@ -262,7 +258,7 @@ final class InputController: IMKInputController {
         guard let fw = mapped else {
             if composing { // 未映射标点: 先上屏首选,原标点放行
                 DebugLog.log("标点 '\(chars)' → 先上屏首选再放行")
-                commit(candidates.first?.text ?? raw, client: client)
+                flush(candidates.first?.text ?? raw, client: client)
             } else {
                 DebugLog.log("无组词,放行 '\(chars)'")
             }
@@ -270,7 +266,7 @@ final class InputController: IMKInputController {
         }
         if composing {
             DebugLog.log("标点 '\(chars)' → 上屏首选 + 全角 '\(fw)'")
-            commit(candidates.first?.text ?? raw, client: client)
+            flush(candidates.first?.text ?? raw, client: client)
         } else {
             DebugLog.log("标点 '\(chars)' → 全角 '\(fw)'")
         }
@@ -283,17 +279,17 @@ final class InputController: IMKInputController {
     // MARK: - 组词状态
 
     override func composedString(_ sender: Any!) -> Any! {
-        NSAttributedString(string: raw)
+        NSAttributedString(string: committedBuffer + raw)
     }
 
     override func originalString(_ sender: Any!) -> NSAttributedString! {
-        NSAttributedString(string: raw)
+        NSAttributedString(string: committedBuffer + raw)
     }
 
     override func commitComposition(_ sender: Any!) {
         DebugLog.log("commitComposition raw='\(raw)' 首选=\(candidates.first?.text ?? "无")")
         guard !raw.isEmpty else { return }
-        commit(candidates.first?.text ?? raw, client: sender)
+        flush(candidates.first?.text ?? raw, client: sender)
     }
 
     // MARK: - 内部
@@ -324,10 +320,11 @@ final class InputController: IMKInputController {
         DebugLog.log("refresh '\(raw)' → 候选 \(candidates.count) 条: "
             + candidates.prefix(5).map { "\($0.text)(\(Int($0.score)))" }.joined(separator: " "))
 
-        let marked = NSMutableAttributedString(string: raw)
-        if !raw.isEmpty {
+        let full = committedBuffer + raw // 已转换段 + 剩余拼音,整句保持预编辑下划线态
+        let marked = NSMutableAttributedString(string: full)
+        if !full.isEmpty {
             marked.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue],
-                                 range: NSRange(location: 0, length: raw.utf16.count))
+                                 range: NSRange(location: 0, length: full.utf16.count))
         }
         textInput.setMarkedText(marked,
                                 selectionRange: NSRange(location: marked.length, length: 0),
@@ -395,43 +392,40 @@ final class InputController: IMKInputController {
             // 无候选时空格/数字:按惯例上屏已输入的拼音原文
             if candidates.isEmpty, !raw.isEmpty {
                 DebugLog.log("无候选 → 空格/数字上屏原文 '\(raw)'")
-                commit(raw, client: client)
+                flush(raw, client: client)
             } else {
                 DebugLog.error("commitCandidate 越界 idx=\(index) 总数=\(candidates.count)")
             }
             return
         }
         let cand = candidates[index]
-        // 渐进前缀词(匹配键串是输入串的真前缀): 上屏该词,剩余拼音继续组词(分段上屏)
+        // 渐进前缀词(匹配键串是输入串的真前缀): 转换该段进缓冲,剩余拼音继续预测(整句保持预编辑态)
         let concat = cand.pinyin.replacingOccurrences(of: " ", with: "")
         if !concat.isEmpty, raw.hasPrefix(concat), concat.count < raw.count {
-            let previousRaw = raw
             let remainder = String(raw.dropFirst(concat.count))
-            DebugLog.log("分段上屏 '\(cand.text)' → 余 '\(remainder)'")
-            commit(cand.text, client: client, remainder: remainder)
-            undoStack.append(UndoEntry(committedText: cand.text, previousRaw: previousRaw, remainderRaw: remainder))
-            return
-        }
-        commit(cand.text, client: client)
-    }
-
-    private func commit(_ text: String, client: Any!, remainder: String? = nil) {
-        guard let textInput = client as? IMKTextInput else {
-            DebugLog.error("commit: client 不符合 IMKTextInput,仅清组词")
-            clearComposition(client); return
-        }
-        DebugLog.log("上屏 '\(text)'" + (remainder.map { ",余 '\($0)'" } ?? ""))
-        textInput.insertText(NSAttributedString(string: text),
-                             replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
-        if let remainder, !remainder.isEmpty {
-            // 分段上屏: 剩余拼音留在组词框继续预测
+            DebugLog.log("分段转换 '\(cand.text)' → 余 '\(remainder)'")
+            committedBuffer += cand.text
+            undoStack.append(UndoEntry(segmentText: cand.text, previousRaw: raw, remainderRaw: remainder))
             raw = remainder
             aiBoostText = nil
             fmGeneration &+= 1
             refresh(client)
-        } else {
-            clearComposition(client)
+            return
         }
+        flush(cand.text, client: client)
+    }
+
+    /// 最终上屏: 已转换段 + 本次文本一并写入,清空全部组词状态
+    private func flush(_ text: String, client: Any!) {
+        guard let textInput = client as? IMKTextInput else {
+            DebugLog.error("flush: client 不符合 IMKTextInput,仅清组词")
+            clearComposition(client); return
+        }
+        let full = committedBuffer + text
+        DebugLog.log("上屏 '\(full)'")
+        textInput.insertText(NSAttributedString(string: full),
+                             replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
+        clearComposition(client)
     }
 
     private func clearComposition(_ client: Any!) {
@@ -440,6 +434,7 @@ final class InputController: IMKInputController {
         aiBoostText = nil
         fmGeneration &+= 1
         undoStack.removeAll()
+        committedBuffer = ""
         if let textInput = client as? IMKTextInput {
             textInput.setMarkedText(NSMutableAttributedString(),
                                     selectionRange: NSRange(location: 0, length: 0),

@@ -96,7 +96,8 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 | 梗合集(自维护) | Experiments/梗合集-关键词拆散.md | 3,300 | markdown 表第一列:顿号拆分、去两端 ⚡/emoji 装饰、仅收纯 CJK ≥2 字,自动注音,权重 100 |
 | 空耳词库(自维护) | Experiments/空耳词库.txt | 15 | 手工标注拼音(词\tq'y\t权重),apostropheTxt 模式;拉丁混排词(如 saki酱)给全拼键位 sa'ki'jiang |
 | 热词与符号(自维护) | Experiments/热词与符号词库.txt | 22 | 手工标注:热词短语(爪巴/你牛大了/nya…)+ 苹果标志(U+F8FF,ping'guo/lin'qin/dianji 三键)+ ☻丨⌘⌥⇧⌃⇪↩⌫⎋ |
-| emoji(CLRD 中文注解) | vendor/emoji/emoji-zh.txt(scripts/build_emoji.py 生成) | ~6千 | unicode-org/cldr-json zh 注解(tts 名称+关键词)pypinyin 自动注音,权重 60;JSON 落 vendor 缓存,离线可重编;"apple" 不可键入(切分器只收合法音节串),苹果标志用 pingguo/linqin |
+| emoji(CLRD 中文注解) | vendor/emoji/emoji-zh.txt(scripts/build_emoji.py 生成) | ~6千 | unicode-org/cldr-json zh 注解(tts 名称+关键词)pypinyin 自动注音,权重 2000;JSON 落 vendor 缓存,离线可重编;"apple" 不可键入(切分器只收合法音节串),苹果标志用 pingguo/linqin |
+| 化学式/希腊字母(自维护) | Experiments/化学式词库/*.txt | 1363 | 用户从微软拼音包转换,格式即 词\tq'y\t权重;元素符号键(ac/ag)靠缩写直查命中;注意键入 syllables 表会进切分器(ac 成为合法"音节") |
 
 - **权重校准基准**:rime-ice base P50=480 / P90=15,680 / P99=20.3 万;外部词库一律压在 100 档(与 tencent 同级)或 clamp 10 万以内,保证不压常用词(dictbench 实测:taikula 中 泰裤辣 排在 太酷啦/太苦啦 之后 ✅)
 - 全量重编 21-22s / 峰值内存 ~1.7GB;dict.bin 349.7 万条 / 145MB;热循环查询平均 0.14-0.61ms
@@ -116,7 +117,8 @@ scripts/package.sh   # 组装 .app bundle + codesign -fs -
 - **外部词库接入(2026-09-05,用户指定 6 源 + 自维护梗合集)**:DictCompiler 新增 5 种输入模式(--rime 无声调 yaml / --apostrophe 撇号拼音 txt / --freq 词频 TSV / --wordlist 源码提取 / --md-keywords markdown 首列),全在 scripts/build_dict.sh 固化;纯拉丁词与含 XX 占位符词条不收(拼音不可键入);同 key 候选超 exactCap=32 时低权重词会被截断,长尾仍由 FM 整句兜底
 - **模糊拼音(2026-09-05)**:选**查询期变体展开**而非 rime 式编译期 derive——不动 dict.bin(省 ~15% 体积),规则改起来不用重编词库。CandidateEngine.candidates() 为前 3 条切分路径生成模糊变体键一并查询:zh↔z ch↔c sh↔s + an↔ang en↔eng in↔ing(按后缀匹配,ian↔iang uan↔uang 自然覆盖);每键变体含原键封顶 8(笛卡尔积截断),模糊命中 ×0.5 保证精确拼音候选优先;模糊查询用小 extCap/scanBudget(48/2 万)控耗时,热循环实测零退化(0.15ms)。自动纠错(移位容错,与「李娜/去哪」类词有冲突需调)未做
 - **简拼与混输(2026-09-05,用户实测驱动三轮迭代)**:① 编译期给每条记录派生**首字母缩写键**(rime abbrev 等价,只进 merged 不进 syllables 表防污染切分器),引擎对整串字母直查缩写键(awsl→阿伟死了/啊我死了,nh→女孩,n→你);② 切分器允许**非音节单字母作缩写音节出现在任意位置**(优先级:缩写少>尾部完整>音节数少),引擎把缩写字母展开成同首字母真音节查询(n+hao→ni/na/ne…+hao 混输,nhao→你好)——展开仅限前 2 条短路径(≤4 段且 ≤2 缩写);③ **渐进前缀兜底**:纯全拼路径完整键无精确命中时,取覆盖前几个音节的词(收集 4 级,nishiyizhimaoniang→你是X),且**任何路径已有精确命中即不再触发**(防 ni'ha'o 这类垃圾路径把"你"拉到"你好"前面);dict.bin 350万→698万条/249MB(简派生翻倍),热循环 0.20ms
-- **Shift 组词中行为(用户纠偏)**:轻点 Shift 时组词中上屏**拼音原文**(↩ 行为),不是第一候选——shiftTappedToggle 必须直接 commit(raw),不能走 commitComposition(它上屏 candidates.first,等于空格行为)
+- **分段转换 + 整句预编辑(2026-09-05,修 Electron 删词不可靠)**:渐进前缀词选中时**不真正上屏**——词进 committedBuffer、剩余拼音留 raw,整句(已转换段+剩余拼音)以 setMarkedText 保持下划线预编辑态;最终上屏(空格满键/回车/标点/失焦)才 insertText(缓冲+文本) 一次写入。退格撤销=纯内存回退缓冲与 raw(不动应用文本)——**不能走 IMK 替换删除**:Chromium 系对 insertText 的 replacementRange 支持残缺,删词静默失败。commitComposition/clearComposition 同步清 committedBuffer/undoStack
+- **Shift 组词中行为(用户纠偏)**:轻点 Shift 时组词中上屏**拼音原文**(↩ 行为),不是第一候选——shiftTappedToggle 必须直接 flush(raw),不能走 commitComposition(它上屏 candidates.first,等于空格行为)
 - **中英模式与全角标点(2026-09-05,踩坑链完整版)**:① IMK **默认只投递 keyDown**,flagsChanged 必须覆写 `recognizedEvents(_:)` 返回 `[.keyDown, .flagsChanged]` 才会送达(AppKit 应用可达,fcitx5-macos 同款);② **Electron/Chromium 系应用(VSCode/Chrome/ZCode)根本不向输入法转发修饰键事件**,IMK 路线在这些应用里是死路(recognizedEvents 声明也无效,实测 0 事件);③ **方向键 keyDown 自带 function|numericPad 修饰位(0xA00000)**,mods 判定前必须剔除,否则 ←/→/↑/↓ 全被当"带修饰键"放行(dac0262 的 ↑↓ 修复因此从未真正生效);④ Shift 中英切换最终方案 = **ShiftModeMonitor(CGMEventTap .cgSessionEventTap + listen-only)全局监听**,IME 进程创建 tap 实测无需 TCC 授权(输入法属受信输入子系统);若创建失败在 activateServer 重试。切模式时组词先上屏拼音原文;模式写 UserDefaults(key AFMEnglishMode)跨重启。英文模式 handle 全直通;中文模式标点映射全角(，。；：？！（）【】「」《》、·～,`$`→￥、`_`→——、`^`→……),引号 `'`→''、`"`→"" 成对交替,`-`/`=`/空格/数字保持半角;**部分客户端 shift+标点的 charactersIgnoringModifiers 不带上档效果**(shift+1 给 '1'),handle 里用 shiftedSymbols 表还原(shift+数字因此不触发选词);候选条 ◂/▸ 鼠标点击翻页(onPage 回调)。注意:合成按键(CUAGEventPostToPid)不经过系统事件流,session tap 看不到,只能真机键盘验证
 
 ## 安装要点(M2 实测踩坑)
