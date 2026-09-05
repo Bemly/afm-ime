@@ -90,8 +90,9 @@ final class InputController: IMKInputController {
     var compositionSuspended = false
 
     private let candidateWindow = CandidateWindowController()
-    /// 候选条水滴拖拽模型(视图直写局部刷新;onDrop 松手吸附上屏)
-    private let dropletModel = CandidateDropletModel()
+    /// 候选条水滴模型(单例:面板/覆盖层/控制器多视图引用同一份几何与折射输出)
+    static let dropletModel = CandidateDropletModel.shared
+    private var dropletModel: CandidateDropletModel { Self.dropletModel }
 
     override init(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
