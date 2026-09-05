@@ -28,9 +28,9 @@ struct TranslationDisplay {
 }
 
 /// 水滴几何与渲染模型(视图直写 @Published 局部刷新,不经 props 每帧往返 InputController)。
-/// frames = 各候选 cell frame("candBar" 坐标,点;OnGeometryChange 回写);
-/// 拖拽模型(水滴不动 bar 动): 水滴钉在抓取位,行内容从水滴下滑过,
-/// 松手把当前在水滴正下方的内容吸附上屏;窗口起点拖拽中由模型自调(dragWindowStart)。
+/// frames = 各候选 cell frame("candBar" 坐标,点;OnGeometryChange 回写)。
+/// 拖拽模型(kb12,「bar 和字一体,按钮不动」): 玻璃条(框+字刚体)随手指在屏幕上整体平移,
+/// 水滴钉在抓取点的屏幕位置不动(条内相对位置随平移反向变化),滑到哪个字松手就上屏哪个字。
 final class CandidateDropletModel: ObservableObject {
     /// 单例(面板/覆盖层/控制器多视图引用同一份几何与折射输出)
     static let shared = CandidateDropletModel()
@@ -41,25 +41,34 @@ final class CandidateDropletModel: ObservableObject {
     private(set) var barGlassHeight: CGFloat = 44 // 玻璃条高度(点)
     private(set) var selectedIndex = 0
     @Published var items: [CandidateItem] = []    // 幽灵折射层的内容源(overlay 渲染)
-    var onDrop: ((Double) -> Void)?               // 松手:连续全局下标 → 吸附上屏
+    var onDrop: ((Double) -> Void)?               // 松手:水滴下候选 → 吸附上屏
+    var onPanelShift: ((CGFloat) -> Void)?        // 拖拽:面板(整条 bar)原点平移(控制器执行)
+    // 面板几何基准(show/shiftPanel 时由控制器回写)
+    private(set) var panelOriginX: CGFloat = 0
+    private(set) var panelWidth: CGFloat = 0
+    private(set) var screenMinX: CGFloat = 0
+    private(set) var screenMaxX: CGFloat = 0
 
     // 几何输入(cell frame 回写)
     @Published var frames: [Int: CGRect] = [:]
     @Published var rowFrame: CGRect = .null       // cells HStack frame(同坐标)
 
     // 交互态
-    @Published var dragFraction: Double? = nil    // 拖拽中的连续全局下标(nil = 非拖拽)
+    @Published var dragFraction: Double? = nil    // 拖拽中: 水滴正下方候选的连续下标(nil = 非拖拽)
     @Published var press: Double = 0              // 按压进度 0-1
     @Published var velocity: Double = 0           // 平滑拖拽速度(归一,驱动挤压拉伸)
-    @Published var rowOffset: CGFloat = 0         // 行内容滑动偏移(拖拽中;幽灵层由 shader shift 同步)
     @Published var dragWindowStart = 0            // 拖拽中的滑动窗口起点(bar 视图拖拽期间用它)
-    private var dragBaseFraction: Double = 0      // 抓取时的锚点位
-    private var windowBase = 0                    // 抓取时的窗口起点
-    private var pitch: CGFloat = 60               // 抓取处 cell 宽(拖拽位移换算)
-    private var pinnedFrame: CGRect?              // 抓取时的水滴静止 frame(拖拽期间钉住)
+    // 拖拽几何基准
+    private var D0: CGFloat = 0                   // 水滴屏幕 x(抓取时确定,拖拽期间恒定)
+    private var P0: CGFloat = 0                   // 抓取时面板原点 x
+    private var hop: CGFloat = 0                  // 窗口滑移的面板补偿累计(精确词宽;保证词屏幕冻结)
+    private var anchor0: Double = 0               // 抓取时水滴下的候选位
+    private var avgPitch: CGFloat = 60            // 平均格宽(锚点粗定位用;精确锚点走 frames 扫描)
+    private var grabFrames: [Int: CGRect] = [:]   // 抓取时 cell frame 快照(窗口滑移补偿用精确词宽)
+    private var pinnedFrame: CGRect?              // 水滴静止 frame(candBar 坐标;拖拽中随面板平移更新)
 
     // 产出(overlay 直接渲染)
-    @Published var blobFrame: CGRect? = nil       // 水滴最终 frame(含缩放/挤压)
+    @Published var blobFrame: CGRect? = nil       // 水滴最终 frame(candBar 坐标,含缩放/挤压)
     /// 网格/翻译/占位等非候选条形态:水滴整体隐藏
     var suppressed = false
 
@@ -72,16 +81,17 @@ final class CandidateDropletModel: ObservableObject {
         recompute()
     }
 
-    func setSelectedIndex(_ idx: Int) {
-        selectedIndex = idx
-        recompute()
+    func applyPanelGeometry(originX: CGFloat, width: CGFloat, screenMinX: CGFloat, screenMaxX: CGFloat) {
+        panelOriginX = originX
+        panelWidth = width
+        self.screenMinX = screenMinX
+        self.screenMaxX = screenMaxX
     }
 
     func reset() {
         dragFraction = nil
         press = 0
         velocity = 0
-        rowOffset = 0
         pinnedFrame = nil
         recompute()
     }
@@ -97,72 +107,90 @@ final class CandidateDropletModel: ObservableObject {
 
     // MARK: 交互
 
+    /// 抓取: 水滴钉在屏幕抓取点(此后屏幕位置恒定),整条 bar 等着从它下面滑过去
     func beginDrag(atX x: CGFloat, fallback: Int) {
         press = 1
         velocity = 0
         let base = fraction(at: x) ?? Double(fallback)
-        dragBaseFraction = base
+        anchor0 = base
         dragFraction = base
-        windowBase = windowStart
+        P0 = panelOriginX
+        hop = 0
+        avgPitch = max(24, rowFrame.width / CGFloat(max(1, min(8, itemCount))))
+        grabFrames = frames
         dragWindowStart = windowStart
-        pitch = interpolatedFrame(at: base)?.width ?? 60
-        // 水滴钉在抓取位(拖拽期间只有按压缩放,不位移)
         if let cell = interpolatedFrame(at: base) {
             let restH = min(barGlassHeight * 0.875, barGlassHeight - 2)
             let restW = cell.width + 6
             pinnedFrame = CGRect(x: cell.midX - restW / 2, y: cell.midY - restH / 2,
                                  width: restW, height: restH)
         }
-        recompute()
+        D0 = P0 + (pinnedFrame?.midX ?? x) // 水滴屏幕 x(拖拽期间恒定)
+        updateBlob(P: P0)
     }
 
+    /// 拖动: 面板(玻璃条+字刚体)平移 P = P0 + dx + hop。
+    /// hop = 窗口滑移补偿(精确词宽): 锚点词滑到窗口边缘时窗口平移一词宽,字在屏幕上冻结不跳。
+    /// 水滴屏幕位置恒定 → 其条内位置随平移反向变化 → 不同候选从水滴下经过。
     func drag(by dx: CGFloat) {
-        guard dragFraction != nil, pitch > 1 else { return }
-        // 水滴固定: bar 向手拖方向滑动,水滴正下方的内容位 = 锚点 - 位移/格宽(左拖 → 更高候选经过)
-        let anchor = max(0, min(Double(itemCount - 1), dragBaseFraction - Double(dx) / Double(pitch)))
-        // 窗口跟随锚点(把锚点保持在窗口中部槽位),换算行偏移补偿窗口跳变
-        var ws = windowBase
-        while anchor < Double(ws + 2), ws > 0 { ws -= 1 }
-        while anchor > Double(ws + 5), ws + 8 < itemCount { ws += 1 }
-        dragWindowStart = ws
-        rowOffset = CGFloat(dx) - CGFloat(ws - windowBase) * pitch
-        let inst = (anchor - dragFraction!) * 3.0
-        velocity = velocity * 0.65 + max(-1, min(1, inst)) * 0.35
-        dragFraction = anchor
-        // 水滴钉在原地(仅按压缩放 + 速度挤压)
-        if let pinned = pinnedFrame {
-            let pressScale = 1 + 0.35 * press
-            let vv = max(-1, min(1, velocity))
-            let sx = pressScale / (1 - max(-0.2, min(0.2, vv * 0.075)))
-            let sy = pressScale * (1 - max(-0.2, min(0.2, vv * 0.025)))
-            blobFrame = pinned.scaledAboutCenter(sx: sx, sy: sy)
+        guard dragFraction != nil else { return }
+        let prev = dragFraction!
+        var P = P0 + dx + hop
+        var ws = dragWindowStart
+        func anchorAt(_ P: CGFloat, _ ws: Int) -> Double {
+            let drop = D0 - P // 水滴 candBar x(面板平移的负向)
+            for i in ws..<min(ws + 8, itemCount) {
+                if let fr = frames[i], drop >= fr.minX, drop < fr.maxX {
+                    return Double(i) + min(1, max(0, (drop - fr.minX) / max(fr.width, 1)))
+                }
+            }
+            return Double(ws) + (drop - 9) / max(avgPitch, 1) // 帧未回写/越端: 平均格宽回退
         }
+        var a = anchorAt(P, ws)
+        for _ in 0..<3 {
+            if a > Double(ws + 6), ws + 8 < itemCount {
+                hop += grabFrames[ws]?.width ?? avgPitch // 左缘词退出 → 面板回弹该词宽(字冻结)
+                ws += 1
+                P = P0 + dx + hop
+                a = anchorAt(P, ws)
+            } else if a < Double(ws + 1), ws > 0 {
+                ws -= 1
+                hop -= grabFrames[ws]?.width ?? avgPitch // 右缘进入 → 面板前进该词宽
+                P = P0 + dx + hop
+                a = anchorAt(P, ws)
+            } else { break }
+        }
+        // 候选范围钳制: 水滴扫到首/尾候选即停
+        if a < 0 { P += (0 - a) * avgPitch; a = 0 }
+        if a > Double(itemCount - 1) { P -= (a - Double(itemCount - 1)) * avgPitch; a = Double(itemCount - 1) }
+        let inst = (a - prev) * 3.0
+        velocity = velocity * 0.65 + max(-1, min(1, inst)) * 0.35
+        dragFraction = a
+        dragWindowStart = ws
+        updateBlob(P: P)
+        onPanelShift?(P)
     }
 
     func endDrag() {
-        let f = dragFraction ?? Double(selectedIndex)
+        // 吸附: 水滴正下的词(当前渲染几何精确)
+        var idx = Int(round(dragFraction ?? Double(selectedIndex)))
+        if let pinned = pinnedFrame {
+            for i in dragWindowStart..<min(dragWindowStart + 8, itemCount) {
+                if let fr = frames[i], pinned.midX >= fr.minX, pinned.midX < fr.maxX { idx = i; break }
+            }
+        }
         press = 0
         velocity = 0
         dragFraction = nil
-        rowOffset = 0
         pinnedFrame = nil
         recompute()
-        onDrop?(f)
+        onDrop?(Double(idx))
     }
 
     // MARK: 几何与渲染
 
     private var windowIndices: Range<Int> {
         windowStart..<min(windowStart + 8, max(windowStart, itemCount))
-    }
-
-    private var currentCellFrame: CGRect? {
-        dragFraction.flatMap { interpolatedFrame(at: $0) }
-    }
-
-    /// 水滴锚定下标(拖拽中随手指,平时 = 选中项)
-    private var activeIndex: Int {
-        dragFraction.map { max(0, min(itemCount - 1, Int($0.rounded()))) } ?? selectedIndex
     }
 
     /// 连续下标 → cell frame 插值(候选宽度不一,按实际 frame 线性插)
@@ -201,11 +229,23 @@ final class CandidateDropletModel: ObservableObject {
         return Double(first)
     }
 
+    /// 水滴 blob(candBar 坐标): 屏幕恒定点 D0 在面板坐标系中的投影,仅按压缩放 + 速度挤压
+    private func updateBlob(P: CGFloat) {
+        guard let pinned = pinnedFrame else { return }
+        let rest = CGRect(x: D0 - P - pinned.width / 2, y: pinned.minY,
+                          width: pinned.width, height: pinned.height)
+        let pressScale = 1 + 0.35 * press
+        let vv = max(-1, min(1, velocity))
+        let sx = pressScale / (1 - max(-0.2, min(0.2, vv * 0.075)))
+        let sy = pressScale * (1 - max(-0.2, min(0.2, vv * 0.025)))
+        blobFrame = rest.scaledAboutCenter(sx: sx, sy: sy)
+    }
+
     /// 重算水滴几何(折射由 overlay 的 layerEffect 直接在幽灵层上做,模型只管几何)
     func recompute() {
-        if dragFraction != nil { return } // 拖拽中: 水滴钉在抓取位,几何由 drag(by:) 维护
+        if dragFraction != nil { return } // 拖拽中: 水滴几何由 drag(by:)/updateBlob 维护
         guard !suppressed,
-              let cell = interpolatedFrame(at: dragFraction ?? Double(selectedIndex)) else {
+              let cell = interpolatedFrame(at: Double(selectedIndex)) else {
             blobFrame = nil
             return
         }
@@ -290,7 +330,6 @@ struct CandidateBarView: View {
                         .modifier(FrameReporter(index: item.index, model: droplet))
                 }
             }
-            .offset(x: dragging ? droplet.rowOffset : 0) // 拖拽 = 行内容从固定水滴下滑过(水滴不动 bar 动)
             expandChevron("▾")
         }
         .modifier(RowFrameReporter(model: droplet))
@@ -302,7 +341,7 @@ struct CandidateBarView: View {
     /// 按住即抓起水滴(跳到按压处的候选),左右拖连续跟手(钳制在可见窗口内,不滑窗口防手势中断);
     /// 松手吸附最近候选并上屏(轻点 = 位移 0 的拖拽,与点选一致)
     private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 4)
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("candBar"))
             .onChanged { v in
                 if droplet.dragFraction == nil {
                     droplet.beginDrag(atX: v.startLocation.x, fallback: selectedIndex)
@@ -449,18 +488,19 @@ struct DropletOverlayView: View {
     /// 折射的幽灵层: 幽灵行(强调色)经 Metal lens 掩膜+折射,仅水滴内可见
     /// (构建期 default.metallib 缺失 → maskShader nil → 无此层,水滴退化为纯玻璃)
     @ViewBuilder private func ghostRefracted(_ f: CGRect) -> some View {
-        if model.rowFrame.width > 0,
-           let shader = DropletLens.maskShader(
-            rect: CGRect(x: f.minX - model.rowFrame.minX, y: f.minY - model.rowFrame.minY,
-                         width: f.width, height: f.height),
-            refraction: (h: 10 * model.press, amount: -14 * model.press),
-            layerSize: model.rowFrame.size,
-            contentShift: -model.rowOffset) { // 内容位移进 shader 采样: 折射层与 bar 同步滑动,水滴固定
-            let ws = model.dragFraction != nil ? model.dragWindowStart : model.windowStart
-            CandidateBarView.ghostSnapshotRow(items: model.items, windowStart: ws)
-                .layerEffect(shader, maxSampleOffset: DropletLens.maxSampleOffset)
-                .offset(x: model.rowFrame.minX, y: model.rowFrame.minY)
-                .allowsHitTesting(false)
+        if model.rowFrame.width > 0 {
+            let rowO = CGPoint(x: model.rowFrame.minX, y: model.rowFrame.minY)
+            let shader = DropletLens.maskShader(
+                rect: CGRect(x: f.minX - rowO.x, y: f.minY - rowO.y, width: f.width, height: f.height),
+                refraction: (h: 10 * model.press, amount: -14 * model.press),
+                layerSize: model.rowFrame.size)
+            if let shader {
+                let ws = model.dragFraction != nil ? model.dragWindowStart : model.windowStart
+                CandidateBarView.ghostSnapshotRow(items: model.items, windowStart: ws)
+                    .layerEffect(shader, maxSampleOffset: DropletLens.maxSampleOffset)
+                    .offset(x: rowO.x, y: rowO.y)
+                    .allowsHitTesting(false)
+            }
         }
     }
 
@@ -617,6 +657,22 @@ final class CandidateWindowController {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    /// 拖拽中整条 bar(面板)刚体平移(x 钳在屏幕内;y 不变)
+    func shiftPanel(toOriginX x: CGFloat) {
+        guard let panel else { return }
+        let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let cx = max(visible.minX + 4, min(visible.maxX - panel.frame.width - 4, x))
+        panel.setFrameOrigin(NSPoint(x: cx, y: panel.frame.origin.y))
+        // 面板几何变了,水滴模型基准同步(词屏幕固定补偿依赖它)
+        InputController.dropletModel.applyPanelGeometry(originX: panel.frame.origin.x,
+                                                        width: panel.frame.width,
+                                                        screenMinX: visible.minX + 4,
+                                                        screenMaxX: visible.maxX - 4)
+        let barFrame = panel.frame.offsetBy(dx: Self.marginH, dy: Self.marginV)
+        onFrameChange?(NSRect(origin: barFrame.origin, size: barFrame.size))
+    }
+
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
         let p = NSPanel(
@@ -713,6 +769,10 @@ final class CandidateWindowController {
         let barFrame = panel.frame.offsetBy(dx: Self.marginH, dy: Self.marginV)
         onFrameChange?(NSRect(origin: barFrame.origin, size: barSize))
         DebugLog.log("候选窗显示 bar=\(NSStringFromSize(barSize)) origin=\(NSStringFromPoint(barOrigin)) caret=\(NSStringFromRect(caretRect)) 网格=\(expanded)")
+
+        // 水滴拖拽的面板几何基准
+        droplet.applyPanelGeometry(originX: panel.frame.origin.x, width: panel.frame.width,
+                                   screenMinX: visible.minX + 4, screenMaxX: visible.maxX - 4)
     }
 
     func hide() {

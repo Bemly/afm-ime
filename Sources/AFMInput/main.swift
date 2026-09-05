@@ -23,7 +23,7 @@ if cliArgs.count > 1 {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var server: IMKServer?
     /// 构建标记:日志里区分新旧进程(重装后防 launchd 复活旧二进制)
-    static let buildTag = "20260906-kb11"
+    static let buildTag = "20260906-kb12"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let connName = (Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String) ?? "AFMInput_Connection"

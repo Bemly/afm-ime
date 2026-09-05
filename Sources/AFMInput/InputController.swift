@@ -106,8 +106,12 @@ final class InputController: IMKInputController {
             guard let self, !self.candidates.isEmpty else { return }
             self.dropletModel.reset()
             let idx = max(0, min(self.candidates.count - 1, Int(fraction.rounded())))
+            self.barWindowStart = max(0, min(max(0, self.candidates.count - Self.perPage), max(0, idx - 3)))
             DebugLog.log("水滴松手 → 上屏 idx=\(idx) (fraction=\(String(format: "%.2f", fraction)))")
             self.commitCandidate(at: idx, client: self.client())
+        }
+        dropletModel.onPanelShift = { [weak self] originX in // 拖拽:整条 bar(面板)刚体平移
+            self?.candidateWindow.shiftPanel(toOriginX: originX)
         }
         DebugLog.log("InputController 初始化 client=\(client != nil)")
     }

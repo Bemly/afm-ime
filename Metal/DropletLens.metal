@@ -27,15 +27,14 @@ static float2 clampToLayerBase(float2 p, float2 layerSize) {
     return clamp(p, float2(0.0), layerSize);
 }
 
-// shift: 内容位移(拖拽时 bar 在固定水滴下滑动;采样点随之平移)
-[[stitchable]] half4 afmLensMask(float2 position, SwiftUI::Layer layer, float4 rect, float2 refr, float2 layerSize, float2 shift) {
+[[stitchable]] half4 afmLensMask(float2 position, SwiftUI::Layer layer, float4 rect, float2 refr, float2 layerSize) {
     float2 halfSize = rect.zw * 0.5;
     float2 centered = position - (rect.xy + halfSize);
     float radius = min(halfSize.x, halfSize.y);
     float sd = sdRoundedRect(centered, halfSize, radius);
     if (sd > 0.0) { return half4(0.0); } // 水滴外 → 透明
     if (-sd >= refr.x || refr.x <= 0.0 || refr.y == 0.0) {
-        return layer.sample(clampToLayerBase(position + shift, layerSize)); // 深处 → 原样(含内容位移)
+        return layer.sample(clampToLayerBase(position, layerSize)); // 深处 → 原样(含内容位移)
     }
     sd = min(sd, 0.0);
     float x = 1.0 - (-sd) / refr.x;
@@ -46,19 +45,19 @@ static float2 clampToLayerBase(float2 p, float2 layerSize) {
     float2 disp = d * grad * ((centered.x * centered.y) / (halfSize.x * halfSize.y));
     // 七采样色散(AGSL 同款权重)
     half4 color = half4(0.0);
-    half4 red = layer.sample(clampToLayerBase(base + disp + shift, layerSize));
+    half4 red = layer.sample(clampToLayerBase(base + disp, layerSize));
     color.r += red.r / 3.5;   color.a += red.a / 7.0;
-    half4 o2 = layer.sample(clampToLayerBase(base + disp * (2.0/3.0) + shift, layerSize));
+    half4 o2 = layer.sample(clampToLayerBase(base + disp * (2.0/3.0), layerSize));
     color.r += o2.r / 3.5;    color.g += o2.g / 7.0; color.a += o2.a / 7.0;
-    half4 y2 = layer.sample(clampToLayerBase(base + disp * (1.0/3.0) + shift, layerSize));
+    half4 y2 = layer.sample(clampToLayerBase(base + disp * (1.0/3.0), layerSize));
     color.r += y2.r / 3.5;    color.g += y2.g / 3.5; color.a += y2.a / 7.0;
-    half4 g2 = layer.sample(clampToLayerBase(base + shift, layerSize));
+    half4 g2 = layer.sample(clampToLayerBase(base, layerSize));
     color.g += g2.g / 3.5;    color.a += g2.a / 7.0;
-    half4 c2 = layer.sample(clampToLayerBase(base - disp * (1.0/3.0) + shift, layerSize));
+    half4 c2 = layer.sample(clampToLayerBase(base - disp * (1.0/3.0), layerSize));
     color.g += c2.g / 3.5;    color.b += c2.b / 3.0; color.a += c2.a / 7.0;
-    half4 b2 = layer.sample(clampToLayerBase(base - disp * (2.0/3.0) + shift, layerSize));
+    half4 b2 = layer.sample(clampToLayerBase(base - disp * (2.0/3.0), layerSize));
     color.b += b2.b / 3.0;    color.a += b2.a / 7.0;
-    half4 p2 = layer.sample(clampToLayerBase(base - disp + shift, layerSize));
+    half4 p2 = layer.sample(clampToLayerBase(base - disp, layerSize));
     color.r += p2.r / 7.0;    color.b += p2.b / 3.0; color.a += p2.a / 7.0;
     return color;
 }
