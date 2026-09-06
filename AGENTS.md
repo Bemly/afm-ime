@@ -34,7 +34,7 @@ AFM拼音.app (安装到 ~/Library/Input Methods/)
     └── 跟随光标定位(client caret rect,缺失时回退屏幕底部居中),点选上屏,数字键 1-9 选词
 ```
 
-**AFM拼音.app(GUI 控制中心,2026-09-06)**:独立常规 App(id moe.bemly.AFMApp,内嵌引擎 bundle)——①安装:一键安装并启用/更新(部署铁律同款 rm+cp 换盘+killall+确认死透+open)/卸载/一键注销/直达输入源设置;②词库:dict.bin 存储序分页浏览 + 拼音前缀搜索(DictStore.records(from:limit:) 线性遍历 + query);③用户词:词/拼音键/次数/档内分(userScore)/词频乘数(boost)查看,右键删除、清空;④设置:模糊拼音/全角标点/FM 增强/词频学习四门控 + 候选条字号(13-22)——写 IME 域 defaults(`UserDefaults(suiteName: moe.bemly.inputmethod.AfmIME)` = IME 进程的 .standard 域),IME 现读现判即时生效。视图宏安全(@State/@StateObject 禁用,ObservableObject 家族,CLT 回退可编译)
+**AFM拼音.app(GUI 控制中心,2026-09-06)**:独立常规 App(id moe.bemly.AFMApp,内嵌引擎 bundle)——①安装:一键安装并启用/更新(部署铁律同款 rm+cp 换盘+killall+确认死透+open)/卸载/一键注销/直达输入源设置;②词库:dict.bin 存储序分页浏览 + 拼音前缀搜索(DictStore.records(from:limit:) 线性遍历 + query);③用户词:词/拼音键/次数/档内分(userScore)/词频乘数(boost)查看,右键删除、清空;④设置:模糊拼音/全角标点/FM 增强/词频学习四门控 + 候选条字号(13-22)——写 IME 域 defaults(`UserDefaults(suiteName: moe.bemly.inputmethod.AfmIME)` = IME 进程的 .standard 域),IME 现读现判即时生效。**液态玻璃规范**:窗口 chrome 交给系统——入口用 `@main` WindowGroup + NavigationSplitView(macOS 26+ 侧栏/工具栏/搜索自动系统玻璃,内容从其下滚过),高频动作进 .toolbar、词库搜索走 .searchable;内容区只用 .glassEffect 区块卡片、不铺不透明材质;视图仍宏安全(@State/@StateObject 禁用,ObservableObject 家族,CLT 回退可编译;main.swift 文件名不能承载 @main,入口文件为 AFMApp.swift)
 
 **FM 延迟策略**:词典候选先秒出保证跟手,FM 重排/整句预测异步到达后原地刷新(不阻塞打字)。
 
