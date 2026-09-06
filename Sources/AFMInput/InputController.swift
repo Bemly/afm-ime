@@ -62,16 +62,12 @@ final class InputController: IMKInputController {
     private var quoteOpenSingle = false                   // '' 成对交替
     private var quoteOpenDouble = false                   // "" 成对交替
 
-    // 候选展示: 9 个滑动窗口(队列式)/ ↓ 展开 8 列网格 / ⌃F 内联翻译
-    static let maxCandidates = 100        // 单次查询候选上限(网格上下滚动需要长列表)
+    // 候选展示: 条恒显前 8 个(无滑动窗口)/ ↓ 展开 8 列滚动网格(ScrollView 滚轮) / ⌃F 内联翻译
+    static let maxCandidates = 100        // 单次查询候选上限(网格滚动需要长列表)
     static let gridColumns = 8            // 展开网格固定列数(候选 1-8 = 首行,移回即收起)
-    static let gridVisibleRows = 4        // 展开网格可见行数
+    static let gridVisibleRows = 4        // 展开网格可见行数(滚动区高度)
 
     private var gridExpanded = false      // ↓ 展开的网格态
-    private var gridRowStart = 0          // 网格可见行窗口起点
-    private var gridSlideDown = true      // 网格行滑动方向
-    private var barWindowStart = 0        // 候选条滑动窗口起点(数字键 1-9 = 窗口内位次)
-    private var lastSlideForward = true   // 窗口滑动方向(驱动队列动画)
     private var translationMode = false   // ⌃F 内联翻译态
     private var translatedText: String?
     private var translating = false
@@ -246,20 +242,24 @@ final class InputController: IMKInputController {
             commitCandidate(at: selectedIndex, client: client)
             return true
 
-        case event.keyCode == 36 where composing: // 回车键(keyCode 36)→ 上屏拼音原文
-            DebugLog.log("回车 → 上屏原文 '\(raw)'")
-            flush(raw, client: client)
+        case event.keyCode == 36 where composing: // 回车: 网格展开 → 上屏选中(同空格);未展开 → 上屏拼音原文
+            if gridExpanded {
+                DebugLog.log("回车(网格) → 上屏选中 idx=\(selectedIndex)")
+                commitCandidate(at: selectedIndex, client: client)
+            } else {
+                DebugLog.log("回车 → 上屏原文 '\(raw)'")
+                flush(raw, client: client)
+            }
             return true
 
-        case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 数字选词: 候选条=窗口内位次(一行 8 个,9 无效),网格=全局 1-9(shift+数字=符号,不选词)
+        case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 数字选词: 全局位次(条内 1-8,网格 1-9;shift+数字=符号,不选词)
             let d = Int(effScalar.value) - 49
-            let idx = gridExpanded ? d : barWindowStart + d
-            if d < (gridExpanded ? 9 : Self.perPage), idx >= 0, idx < candidates.count {
-                DebugLog.log("数字 \(d + 1) → 上屏 idx=\(idx)")
-                commitCandidate(at: idx, client: client)
+            if d < (gridExpanded ? 9 : Self.perPage), d < candidates.count {
+                DebugLog.log("数字 \(d + 1) → 上屏 idx=\(d)")
+                commitCandidate(at: d, client: client)
                 return true
             }
-            DebugLog.log("数字越界 idx=\(idx),放行")
+            DebugLog.log("数字越界 idx=\(d),放行")
             return false
 
         case event.keyCode == 51 where composing: // 退格键(keyCode 51)
@@ -292,42 +292,39 @@ final class InputController: IMKInputController {
             clearComposition(client)
             return true
 
-        case event.keyCode == 125 where composing: // ↓ → 展开 8 列网格 / 网格内下移一行
+        case event.keyCode == 125 where composing: // ↓ → 展开 8 列滚动网格 / 网格内下移一行
             if translationMode { exitTranslationMode(client) }
             if gridExpanded { moveInGrid(Self.gridColumns) } else { expandGrid() }
             DebugLog.log("↓ 展开网格=\(gridExpanded) 选中=\(selectedIndex)")
             updateCandidateWindow(client)
             return true
 
-        case event.keyCode == 126 where composing: // ↑ → 网格上移一行(顶行收起) / 候选条上移
+        case event.keyCode == 126 where composing: // ↑ → 网格上移一行(顶行收起) / 条内上移
             if translationMode { exitTranslationMode(client) }
-            if gridExpanded { moveInGrid(-Self.gridColumns) } else { moveSelection(-1) }
+            if gridExpanded { moveInGrid(-Self.gridColumns) } else { moveSelectionBar(-1) }
             DebugLog.log("↑ 展开网格=\(gridExpanded) 选中=\(selectedIndex)")
             updateCandidateWindow(client)
             return true
 
-        case event.keyCode == 124 where composing: // → → 下一个(候选条队列滑动 / 网格右移,移回首行收起)
+        case event.keyCode == 124 where composing: // → → 下一个(条内越过第 8 个直接展开网格)
             if translationMode { exitTranslationMode(client) }
-            gridExpanded ? moveInGrid(1) : moveSelection(+1)
-            DebugLog.log("→ 展开网格=\(gridExpanded) 选中=\(selectedIndex) 窗口=\(barWindowStart)")
+            gridExpanded ? moveInGrid(1) : moveSelectionBar(1)
+            DebugLog.log("→ 展开网格=\(gridExpanded) 选中=\(selectedIndex)")
             updateCandidateWindow(client)
             return true
 
         case event.keyCode == 123 where composing: // ← → 上一个
             if translationMode { exitTranslationMode(client) }
-            gridExpanded ? moveInGrid(-1) : moveSelection(-1)
-            DebugLog.log("← 展开网格=\(gridExpanded) 选中=\(selectedIndex) 窗口=\(barWindowStart)")
+            gridExpanded ? moveInGrid(-1) : moveSelectionBar(-1)
+            DebugLog.log("← 展开网格=\(gridExpanded) 选中=\(selectedIndex)")
             updateCandidateWindow(client)
             return true
 
-        case (eff == "=" || eff == "-") where composing: // =/- 翻页(网格内按行)
+        case (eff == "=" || eff == "-") where composing: // =/- 翻页(条内 ±8 越界自动展/收网格,网格内 ±一行)
             if translationMode { exitTranslationMode(client) }
-            if gridExpanded {
-                moveInGrid(eff == "=" ? Self.gridColumns : -Self.gridColumns)
-            } else {
-                changeBarWindow(eff == "=" ? 1 : -1)
-            }
-            DebugLog.log("翻页\(eff == "=" ? "+" : "-") → 选中=\(selectedIndex) 窗口=\(barWindowStart)")
+            let step = eff == "=" ? 1 : -1
+            gridExpanded ? moveInGrid(step * Self.gridColumns) : moveSelectionBar(step * Self.perPage)
+            DebugLog.log("翻页\(eff == "=" ? "+" : "-") → 选中=\(selectedIndex) 网格=\(gridExpanded)")
             updateCandidateWindow(client)
             return true
 
@@ -400,71 +397,40 @@ final class InputController: IMKInputController {
 
     // MARK: - 内部
 
-    private func moveSelection(_ delta: Int) {
-        guard !candidates.isEmpty else { return }
-        var idx = selectedIndex + delta
-        if idx < 0 { idx = candidates.count - 1 }
-        if idx >= candidates.count { idx = 0 }
-        lastSlideForward = delta > 0
-        selectedIndex = idx
-        slideBarWindow()
-    }
+    // MARK: - 选中移动
+    // 条恒显前 8 个(无滑动窗口);←→ 在 0-7 内移动,→ 越过第 8 个直接展开网格;
+    // 网格用 ScrollView 滚动(滚轮/滚动条,选中行越界自动滚入),移回首行(0-7)自动收起回条
 
-    /// 候选条滑动窗口: 选中越过边缘时窗口跟移(队列效果,滑动动画由视图层 transition 完成)
-    private func slideBarWindow() {
-        let w = Self.perPage
-        if selectedIndex < barWindowStart {
-            barWindowStart = selectedIndex
-        } else if selectedIndex >= barWindowStart + w {
-            barWindowStart = selectedIndex - w + 1
+    /// 条内 ←→/翻页
+    private func moveSelectionBar(_ delta: Int) {
+        guard !candidates.isEmpty else { return }
+        let idx = selectedIndex + delta
+        if delta > 0, idx >= Self.perPage, candidates.count > Self.perPage {
+            expandGrid() // 越过条内第 8 个 → 直接展开网格继续
+            selectedIndex = min(idx, candidates.count - 1)
+        } else {
+            selectedIndex = max(0, min(idx, min(Self.perPage, candidates.count) - 1))
         }
-        barWindowStart = max(0, min(barWindowStart, max(0, candidates.count - w)))
     }
 
-    /// =/- 翻页: 窗口整窗滑动,选中跳到窗口首位
-    private func changeBarWindow(_ pages: Int) {
-        guard !candidates.isEmpty else { return }
-        lastSlideForward = pages > 0
-        barWindowStart = max(0, min(barWindowStart + pages * Self.perPage,
-                                    max(0, candidates.count - Self.perPage)))
-        selectedIndex = barWindowStart
-    }
-
-    /// 网格内移动(±1 左右,±gridColumns 上下);从后面的行移回首行(前 8 个候选)→ 收起回候选条
+    /// 网格内 ±1/±列数;顶行按 ↑ 收起,移回首行(0-7)自动收起
     private func moveInGrid(_ delta: Int) {
         guard !candidates.isEmpty else { return }
-        let prev = selectedIndex
-        var idx = prev + delta
+        var idx = selectedIndex + delta
         if idx < 0 {
-            if delta == -Self.gridColumns { collapseGrid(); return } // 顶行按 ↑ → 收起
-            idx = candidates.count - 1
+            if delta == -Self.gridColumns { collapseGrid(); return }
+            idx = 0
         }
-        if idx >= candidates.count { idx = candidates.count - 1 }
-        selectedIndex = idx
-        ensureGridRowVisible(idx / Self.gridColumns)
-        if prev >= Self.gridColumns, idx < Self.gridColumns { collapseGrid() }
+        selectedIndex = min(idx, candidates.count - 1)
+        if selectedIndex < Self.gridColumns { collapseGrid() }
     }
 
     private func expandGrid() {
         gridExpanded = true
-        gridRowStart = 0
-        gridSlideDown = true
-        ensureGridRowVisible(selectedIndex / Self.gridColumns)
     }
 
     private func collapseGrid() {
         gridExpanded = false
-        lastSlideForward = false
-        slideBarWindow()
-    }
-
-    /// 选中行越出可见行窗口时整体滑动(动画方向随移动方向)
-    private func ensureGridRowVisible(_ r: Int) {
-        let maxStart = max(0, (candidates.count - 1) / Self.gridColumns - Self.gridVisibleRows + 1)
-        let clamped = max(0, min(r, maxStart))
-        guard clamped != gridRowStart else { return }
-        gridSlideDown = clamped > gridRowStart
-        gridRowStart = clamped
     }
 
     private func refresh(_ client: Any!) {
@@ -474,8 +440,6 @@ final class InputController: IMKInputController {
         }
         candidates = raw.isEmpty ? [] : (Self.engine?.candidates(for: raw, limit: Self.maxCandidates) ?? [])
         selectedIndex = 0
-        barWindowStart = 0
-        gridRowStart = 0
         dropletModel.reset() // 组词刷新,水滴归位
         exitTranslationState() // 组词已变化,翻译态作废(窗口由本次 refresh 统一刷新)
         DebugLog.log("refresh '\(raw)' → 候选 \(candidates.count) 条: "
@@ -578,24 +542,19 @@ final class InputController: IMKInputController {
             Self.latestCaret = caret
             DebugLog.log("候选窗占位(FM 整句中) caret=\(NSStringFromRect(caret))")
             candidateWindow.show(
-                items: [], selectedIndex: 0, windowStart: 0, slideForward: true,
-                expanded: false, rowStart: 0, rowSlideDown: true,
-                translation: nil, isLoading: true, droplet: dropletModel, caretRect: caret,
+                items: [], selectedIndex: 0,
+                expanded: false, translation: nil, isLoading: true, droplet: dropletModel, caretRect: caret,
                 onSelect: { _ in }, onToggleExpand: {})
             return
         }
         let caret = Self.caretRect(client)
         Self.latestCaret = caret
         let translation = translationMode ? TranslationDisplay(text: translatedText, translating: translating) : nil
-        DebugLog.log("候选窗定位 caret=\(NSStringFromRect(caret)) 选中=\(selectedIndex) 窗口=\(barWindowStart) 网格=\(gridExpanded) 翻译=\(translation != nil)")
+        DebugLog.log("候选窗定位 caret=\(NSStringFromRect(caret)) 选中=\(selectedIndex) 网格=\(gridExpanded) 翻译=\(translation != nil)")
         candidateWindow.show(
             items: candidateItems(),
             selectedIndex: selectedIndex,
-            windowStart: barWindowStart,
-            slideForward: lastSlideForward,
             expanded: gridExpanded,
-            rowStart: gridRowStart,
-            rowSlideDown: gridSlideDown,
             translation: translation,
             droplet: dropletModel,
             caretRect: caret,
@@ -705,8 +664,6 @@ final class InputController: IMKInputController {
         committedBuffer = ""
         compositionSuspended = false
         gridExpanded = false
-        barWindowStart = 0
-        gridRowStart = 0
         dropletModel.reset()
         exitTranslationState()
         if let textInput = client as? IMKTextInput {
@@ -788,8 +745,6 @@ final class InputController: IMKInputController {
         candidates.insert(picked, at: 0)
         aiBoostText = picked.text
         selectedIndex = 0
-        barWindowStart = 0
-        lastSlideForward = true
         updateCandidateWindow(client())
     }
 
@@ -800,8 +755,6 @@ final class InputController: IMKInputController {
         candidates.insert(cand, at: 0)
         aiBoostText = sentence
         selectedIndex = 0
-        barWindowStart = 0
-        lastSlideForward = true
         updateCandidateWindow(client())
     }
 
