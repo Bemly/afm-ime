@@ -9,7 +9,6 @@ import IMECore
 // 注意: 禁用 @State/@StateObject 等宏包装器(保持 CLT 回退构建可用),用 ObservableObject 家族。
 
 private let imeDomain = "moe.bemly.inputmethod.AfmIME"
-private let imeAppName = "AFM拼音.app" // 安装到 ~/Library/Input Methods 的 bundle 名
 
 // MARK: - 数据模型
 
@@ -96,11 +95,21 @@ final class AppModel: ObservableObject {
 
     // MARK: 词库
 
-    /// 词库数据源: 已装输入法 bundle → 本 App 内嵌的输入法 bundle → 仓库 Data/(开发)
+    /// 本 helper 位于 引擎.app/Contents/PlugIns/AFMSettings.app → 上三级即引擎 bundle
+    var engineBundleURL: URL {
+        Bundle.main.bundleURL
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    var runningFromInstalledLocation: Bool {
+        engineBundleURL.standardizedFileURL.path == IMEInstaller.installedIMEURL().standardizedFileURL.path
+    }
+
+    /// 词库数据源: 已装输入法 bundle → 本 helper 的父引擎 bundle → 仓库 Data/(开发)
     private func loadStore() {
         let candidates = [
             IMEInstaller.installedIMEURL().appendingPathComponent("Contents/Resources/dict.bin").path,
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(imeAppName)/Contents/Resources/dict.bin").path,
+            engineBundleURL.appendingPathComponent("Contents/Resources/dict.bin").path,
             "Data/dict.bin",
         ]
         for path in candidates where FileManager.default.fileExists(atPath: path) {
@@ -166,13 +175,20 @@ final class AppModel: ObservableObject {
     // MARK: 安装
 
     var embeddedIMEURL: URL {
-        Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(imeAppName)")
+        engineBundleURL // 合并架构: helper 的父 bundle 即输入法本体
     }
 
     func installAndEnable() {
         var l = "———— 安装并启用 ————\n"
+        if runningFromInstalledLocation {
+            l += "本设置中心已运行于安装位置,跳过换盘,直接收敛启用状态\n"
+            l += IMEInstaller.enable().log
+            installLog = l + installLog
+            refreshStatus()
+            return
+        }
         guard FileManager.default.fileExists(atPath: embeddedIMEURL.path) else {
-            installLog = l + "✗ App 内未内嵌输入法 bundle(打包不完整)\n" + installLog
+            installLog = l + "✗ 找不到引擎 bundle(打包不完整)\n" + installLog
             return
         }
         l += IMEInstaller.install(embeddedIMEURL: embeddedIMEURL)
@@ -182,12 +198,17 @@ final class AppModel: ObservableObject {
         refreshStatus()
     }
 
-    /// 日常更新(部署铁律): rm + cp 全量换盘 → killall → 确认死透 → open
+    /// 更新: 从本包 rm+cp 换盘 → killall → 确认死透 → open(部署铁律);
+    /// 运行于安装位置时没有新包可换,提示走重新打包部署
     func redeploy() {
         var l = "———— 更新输入法 ————\n"
         let dest = IMEInstaller.installedIMEURL()
+        if runningFromInstalledLocation {
+            installLog = l + "本设置中心运行于安装位置,没有新包可换——重新 scripts/package.sh 后替换 bundle 即可\n" + installLog
+            return
+        }
         guard FileManager.default.fileExists(atPath: embeddedIMEURL.path) else {
-            installLog = l + "✗ App 内未内嵌输入法 bundle\n" + installLog
+            installLog = l + "✗ 找不到引擎 bundle\n" + installLog
             return
         }
         do {

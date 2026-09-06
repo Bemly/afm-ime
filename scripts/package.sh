@@ -1,6 +1,5 @@
 #!/bin/zsh
-# 打包: 输入法引擎 build/AFMInput.app(部署到 ~/Library/Input Methods/AFM拼音.app)
-#      + GUI 控制中心 build/AFM拼音.app(安装器+词库+用户词+设置,内嵌引擎)
+# 打包单一产物 build/AFM拼音.app = 输入法引擎 + 内嵌设置中心(Contents/PlugIns/AFMSettings.app)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -56,9 +55,25 @@ else
   echo "!! 未找到 Xcode(DEVELOPER_DIR 未设且 /Applications 无 Xcode*.app)——跳过 Metal shader,水滴将无折射"
 fi
 
-# 输入法引擎 bundle: build/AFMInput.app(部署到 ~/Library/Input Methods/AFM拼音.app,文件名无关紧要,
-# TIS 按 bundle id 识别;GUI app 叫 AFM拼音.app,避免 build 目录同名冲突)
-APP="build/AFMInput.app"
+# App 图标: appicon.tiff(128px) → iconset 多尺寸 → AppIcon.icns(CFBundleIconFile, Finder/Launchpad/Dock 生效;
+# 运行时 NSApp.applicationIconImage 只影响运行实例,没有 icns 时 Finder 显示通用图标)
+ICON=""
+if [ -f Data/appicon.tiff ]; then
+  ICONSET="build/AppIcon.iconset"
+  rm -rf "$ICONSET"; mkdir -p "$ICONSET"
+  for s in 16 32 128; do
+    sips -s format png -z $s $s Data/appicon.tiff --out "$ICONSET/icon_${s}x$s.png" >/dev/null
+    d=$((s * 2))
+    sips -s format png -z $d $d Data/appicon.tiff --out "$ICONSET/icon_${s}x$s@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o build/AppIcon.icns && ICON="build/AppIcon.icns" && rm -rf "$ICONSET"
+  [ -z "$ICON" ] && echo "!! AppIcon.icns 生成失败——两包将无 Finder 图标"
+fi
+
+# 单一产物: build/AFM拼音.app = 输入法引擎(部署到 ~/Library/Input Methods/AFM拼音.app),
+# 设置中心作为 helper 嵌在 Contents/PlugIns/AFMSettings.app(经输入法菜单「设置…」打开,
+# 顶层只有一个 App 条目,Launchpad/Spotlight 不再出现双 AFM)
+APP="build/AFM拼音.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINDIR/afm-input" "$APP/Contents/MacOS/AFMInput"
@@ -66,15 +81,16 @@ cp Data/dict.bin "$APP/Contents/Resources/dict.bin"
 [ -n "$METALLIB" ] && cp "$METALLIB" "$APP/Contents/Resources/default.metallib"
 [ -f Data/icon.tiff ] && cp Data/icon.tiff "$APP/Contents/Resources/icon.tiff"
 [ -f Data/appicon.tiff ] && cp Data/appicon.tiff "$APP/Contents/Resources/appicon.tiff"
+[ -n "$ICON" ] && cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
 
-# 输入源显示名:TIS 用「输入源 ID」在 InfoPlist.strings 里查显示名(参考 squirrel InfoPlist.xcstrings)
+# 输入源显示名:TIS 用「输入源 ID」在 InfoPlist.strings 里查显示名(参考 squirrel InfoPlist.xcstrings);
+# 注意只放 TIS id 键——CFBundleName/DisplayName 不放这里,让 Finder/Launchpad 显示「AFM拼音引擎」
+# 与 GUI 控制中心(AFM拼音)区分,输入法菜单/系统设置仍显示「AFM拼音」
 for lproj in zh-Hans en; do
   mkdir -p "$APP/Contents/Resources/$lproj.lproj"
   cat > "$APP/Contents/Resources/$lproj.lproj/InfoPlist.strings" <<'STRINGS'
 "moe.bemly.inputmethod.AfmIME" = "AFM拼音";
 "moe.bemly.inputmethod.AfmIME.afmpinyin.hans" = "AFM拼音";
-"CFBundleDisplayName" = "AFM拼音";
-"CFBundleName" = "AFM拼音";
 STRINGS
 done
 
@@ -93,6 +109,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
 	<key>CFBundleVersion</key><string>20260906</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>LSBackgroundOnly</key><false/>
 	<key>LSUIElement</key><true/>
 	<key>InputMethodConnectionName</key><string>moe.bemly.inputmethod.AfmIME_Connection</string>
@@ -129,35 +146,35 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --sign "$SIGN_ID" "$APP"
-echo "打包完成: $APP (签名: $SIGN_ID)"
-
-# GUI 控制中心 App: build/AFM拼音.app(内嵌输入法引擎;安装器 + 词库浏览 + 用户词权重 + 设置,液态玻璃)
-GUI="build/AFM拼音.app"
-rm -rf "$GUI"
-mkdir -p "$GUI/Contents/MacOS" "$GUI/Contents/Resources"
-cp "$BINDIR/afm-app" "$GUI/Contents/MacOS/AFMApp"
-cp -R "$APP" "$GUI/Contents/Resources/AFM拼音.app"
-[ -f Data/appicon.tiff ] && cp Data/appicon.tiff "$GUI/Contents/Resources/appicon.tiff"
-cat > "$GUI/Contents/Info.plist" <<'PLIST'
+# 设置中心 helper: 嵌在引擎 bundle Contents/PlugIns/(独立进程承载 GUI 窗口,引擎本身 LSUIElement
+# 无法弹窗;嵌套 bundle 不进 Launchpad/Spotlight 索引 → 顶层只有一个「AFM拼音」条目)。
+# 入口: 输入法菜单「设置…」(InputController.menu) / 未安装态直接打开引擎 bundle 自动拉起。
+HELPER="$APP/Contents/PlugIns/AFMSettings.app"
+mkdir -p "$HELPER/Contents/MacOS" "$HELPER/Contents/Resources"
+cp "$BINDIR/afm-app" "$HELPER/Contents/MacOS/AFMSettings"
+[ -n "$ICON" ] && cp "$ICON" "$HELPER/Contents/Resources/AppIcon.icns"
+cat > "$HELPER/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
-	<key>CFBundleExecutable</key><string>AFMApp</string>
-	<key>CFBundleIdentifier</key><string>moe.bemly.AFMApp</string>
+	<key>CFBundleExecutable</key><string>AFMSettings</string>
+	<key>CFBundleIdentifier</key><string>moe.bemly.AFMSettings</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-	<key>CFBundleName</key><string>AFM拼音</string>
-	<key>CFBundleDisplayName</key><string>AFM拼音</string>
+	<key>CFBundleName</key><string>AFM拼音设置</string>
+	<key>CFBundleDisplayName</key><string>AFM拼音设置</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
 	<key>CFBundleVersion</key><string>20260906</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>LSMinimumSystemVersion</key><string>27.0</string>
 </dict>
 </plist>
 PLIST
-codesign --force --sign "$SIGN_ID" "$GUI"
-echo "打包完成: $GUI (签名: $SIGN_ID)"
+codesign --force --sign "$SIGN_ID" "$HELPER"
+
+codesign --force --sign "$SIGN_ID" "$APP"
+echo "打包完成: $APP (签名: $SIGN_ID, 内含设置中心 helper)"

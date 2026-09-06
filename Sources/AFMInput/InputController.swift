@@ -137,6 +137,27 @@ final class InputController: IMKInputController {
         candidateWindow.hide()
     }
 
+    // MARK: - 输入法菜单(菜单栏输入菜单里的「设置…」入口)
+
+    /// IMK 输入法子菜单:AFM拼音 激活时点菜单栏拼字图标可见
+    override func menu() -> NSMenu! {
+        let m = NSMenu(title: "AFM拼音")
+        m.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings(_:)), keyEquivalent: ""))
+        return m
+    }
+
+    /// 打开设置中心(嵌在引擎 bundle PlugIns/AFMSettings.app 的独立进程——引擎 LSUIElement 不能弹窗)。
+    /// IMK 菜单点击经 doCommandBySelector 路由到本方法(默认实现检查 controller 是否响应选择器)
+    @objc func openSettings(_ sender: Any?) {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Contents/PlugIns/AFMSettings.app")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            DebugLog.error("设置中心 helper 缺失: \(url.path)")
+            return
+        }
+        DebugLog.log("输入法菜单 → 打开设置中心")
+        NSWorkspace.shared.open(url)
+    }
+
     // MARK: - 按键处理
 
     override func handle(_ event: NSEvent!, client: Any!) -> Bool {

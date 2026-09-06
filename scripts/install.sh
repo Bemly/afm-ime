@@ -4,17 +4,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-[ -d "build/AFMInput.app" ] || { echo "先运行 scripts/package.sh"; exit 1; }
+[ -d "build/AFM拼音.app" ] || { echo "先运行 scripts/package.sh"; exit 1; }
 
 if [ "${1:-}" = "--system" ]; then
     APP="/Library/Input Methods/AFM拼音.app"
     sudo rm -rf "$APP"
-    sudo cp -R "build/AFMInput.app" "$APP"
+    sudo cp -R "build/AFM拼音.app" "$APP"
     sudo chown -R root:wheel "$APP"
 else
     APP="$HOME/Library/Input Methods/AFM拼音.app"
     rm -rf "$APP"
-    cp -R "build/AFMInput.app" "$APP"
+    cp -R "build/AFM拼音.app" "$APP"
 fi
 
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
