@@ -14,6 +14,8 @@ private let imeAppName = "AFM拼音.app" // 安装到 ~/Library/Input Methods �
 // MARK: - 数据模型
 
 final class AppModel: ObservableObject {
+    static let shared = AppModel()
+
     enum Tab: String, Identifiable, CaseIterable {
         case install, dict, user, settings
         var id: String { rawValue }
@@ -250,67 +252,41 @@ final class AppModel: ObservableObject {
     }
 }
 
-// MARK: - 根视图(侧栏 + 详情)
+// MARK: - 根视图(系统液态玻璃 chrome: NavigationSplitView 侧栏自动玻璃,内容从其下滚过)
 
 struct RootView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-                .frame(width: 168)
-            Divider().opacity(0.4)
-            detail
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        NavigationSplitView {
+            List(selection: sidebarSelection) {
+                ForEach(AppModel.Tab.allCases) { tab in
+                    Label(tab.title, systemImage: tab.icon).tag(tab)
+                }
+                Section {
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(176)
+        } detail: {
+            Group {
+                switch model.tab {
+                case .install: InstallView(model: model)
+                case .dict: DictView(model: model)
+                case .user: UserWordsView(model: model)
+                case .settings: SettingsView(model: model)
+                }
+            }
+            .navigationTitle(model.tab.title)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(minWidth: 600, minHeight: 440)
         }
-        .frame(width: 780, height: 560)
-        .background(.ultraThickMaterial) // 玻璃之上再铺材质,保证暗亮色下可读
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if let url = Bundle.main.url(forResource: "appicon", withExtension: "tiff"),
-                   let img = NSImage(contentsOf: url) {
-                    Image(nsImage: img).resizable().frame(width: 30, height: 30)
-                }
-                Text("AFM拼音").font(.title3.bold())
-            }
-            .padding(.bottom, 14)
-            ForEach(AppModel.Tab.allCases) { tab in
-                Button {
-                    model.tab = tab
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: tab.icon).frame(width: 18)
-                        Text(tab.title)
-                        Spacer()
-                    }
-                    .padding(.vertical, 6).padding(.horizontal, 10)
-                    .background {
-                        if model.tab == tab {
-                            Capsule().fill(.white.opacity(0.16))
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(model.tab == tab ? .primary : .secondary)
-            }
-            Spacer()
-            Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                .font(.caption2).foregroundStyle(.tertiary)
-        }
-        .padding(14)
-    }
-
-    @ViewBuilder private var detail: some View {
-        switch model.tab {
-        case .install: InstallView(model: model)
-        case .dict: DictView(model: model)
-        case .user: UserWordsView(model: model)
-        case .settings: SettingsView(model: model)
-        }
+    private var sidebarSelection: Binding<AppModel.Tab?> {
+        Binding(get: { model.tab }, set: { if let t = $0 { model.tab = t } })
     }
 }
 
@@ -342,10 +318,6 @@ struct InstallView: View {
                     Text(model.status).font(.callout)
                     HStack(spacing: 10) {
                         Button("安装并启用") { model.installAndEnable() }.buttonStyle(.borderedProminent)
-                        Button("更新输入法(换盘+重启引擎)") { model.redeploy() }
-                        Button("打开输入源设置") { model.openInputSourceSettings() }
-                    }
-                    HStack(spacing: 10) {
                         Button("一键注销(仅首次安装需要)") { model.logout() }
                         Button("卸载", role: .destructive) { model.confirmUninstall = true }
                     }
@@ -364,6 +336,14 @@ struct InstallView: View {
             }
             .padding(16)
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { model.redeploy() } label: { Label("更新输入法", systemImage: "arrow.triangle.2.circlepath") }
+            }
+            ToolbarItem {
+                Button { model.openInputSourceSettings() } label: { Label("输入源设置", systemImage: "slider.horizontal.3") }
+            }
+        }
     }
 }
 
@@ -375,30 +355,19 @@ struct DictView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                TextField("拼音前缀搜索(如 nihao / nh / meibeng)", text: $model.dictSearch)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
-                Text(model.dictStats.isEmpty ? "加载中…" : model.dictStats)
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 16).padding(.top, 14)
-
-            if model.dictSearch.isEmpty {
-                HStack {
+                if model.dictSearch.isEmpty {
                     Button("‹ 上一页") { if model.dictPage > 0 { model.dictPage -= 1 } }
                         .disabled(model.dictPage == 0)
                     Text("第 \(model.dictPage + 1) / \(model.dictPageCount) 页").font(.caption).foregroundStyle(.secondary)
                     Button("下一页 ›") { if model.dictPage < model.dictPageCount - 1 { model.dictPage += 1 } }
                         .disabled(model.dictPage >= model.dictPageCount - 1)
-                    Spacer()
-                    Text("存储序 = 拼音键字典序,同键内词频降序").font(.caption2).foregroundStyle(.tertiary)
+                } else {
+                    Text("搜索到 \(model.dictRows.count) 条(显示前 80)").font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 16)
-            } else {
-                Text("搜索 \(model.dictRows.count) 条(显示前 80)").font(.caption).foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
+                Spacer()
+                Text(model.dictStats).font(.caption).foregroundStyle(.tertiary)
             }
+            .padding(.horizontal, 16).padding(.top, 8)
 
             List(Array(model.dictRows.prefix(80).enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 12) {
@@ -411,6 +380,7 @@ struct DictView: View {
             .listStyle(.inset)
             .padding(.horizontal, 10)
         }
+        .searchable(text: $model.dictSearch, placement: .toolbar, prompt: "拼音前缀,如 nihao / nh / meibeng")
     }
 }
 
@@ -421,18 +391,9 @@ struct UserWordsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Text("共 \(model.userRows.count) 条 · 用户词处于最高优先档(用户 2 > 全键 1 > 渐进 0),打分 = 2万 + 1.5万·log10(1+次数),词频乘数 = min(1 + 0.5·log10(1+次数), ×3) 仅 ≥2 字词")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("刷新") { model.reloadUserRows() }
-                Button("清空全部", role: .destructive) { model.confirmClear = true }
-                    .disabled(model.userRows.isEmpty)
-            }
-            .padding(.horizontal, 16).padding(.top, 14)
-            .confirmationDialog("清空全部用户词与词频?", isPresented: $model.confirmClear, titleVisibility: .visible) {
-                Button("清空", role: .destructive) { model.clearUsers() }
-            }
+            Text("共 \(model.userRows.count) 条 · 用户词处于最高优先档(用户 2 > 全键 1 > 渐进 0),打分 = 2万 + 1.5万·log10(1+次数),词频乘数 = min(1 + 0.5·log10(1+次数), ×3) 仅 ≥2 字词")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.top, 8)
 
             List {
                 ForEach(model.userRows) { row in
@@ -453,6 +414,18 @@ struct UserWordsView: View {
             .padding(.horizontal, 10)
             Text("右键条目可删除 · 上屏自动学习(词组学习:分段组句整词组入词库)")
                 .font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, 16)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { model.confirmClear = true } label: { Label("清空全部", systemImage: "trash") }
+                    .disabled(model.userRows.isEmpty)
+            }
+            ToolbarItem {
+                Button { model.reloadUserRows() } label: { Label("刷新", systemImage: "arrow.clockwise") }
+            }
+        }
+        .confirmationDialog("清空全部用户词与词频?", isPresented: $model.confirmClear, titleVisibility: .visible) {
+            Button("清空", role: .destructive) { model.clearUsers() }
         }
     }
 }
@@ -493,31 +466,21 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - 入口
+// MARK: - 入口(WindowGroup 场景:窗口 chrome 交给系统——玻璃侧栏/工具栏/搜索自动生效)
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    let model = AppModel()
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        if let url = Bundle.main.url(forResource: "appicon", withExtension: "tiff"),
-           let img = NSImage(contentsOf: url) {
-            NSApp.applicationIconImage = img
+@main
+struct AFMControlCenter: App {
+    var body: some Scene {
+        WindowGroup("AFM拼音") {
+            RootView(model: AppModel.shared)
+                .onAppear {
+                    if let url = Bundle.main.url(forResource: "appicon", withExtension: "tiff"),
+                       let img = NSImage(contentsOf: url) {
+                        NSApp.applicationIconImage = img
+                    }
+                    NSLog("[AFMApp] 启动 v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") 词库=\(AppModel.shared.store != nil ? "已加载" : "未找到")")
+                }
         }
-        let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 560),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered, defer: false)
-        win.title = "AFM拼音"
-        win.contentView = NSHostingView(rootView: RootView(model: model))
-        win.center()
-        win.makeKeyAndOrderFront(nil)
-        NSLog("[AFMApp] 启动 v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") 词库=\(model.store != nil ? "已加载" : "未找到")")
+        .defaultSize(width: 820, height: 560)
     }
 }
-
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.regular)
-app.activate(ignoringOtherApps: true)
-app.run()
