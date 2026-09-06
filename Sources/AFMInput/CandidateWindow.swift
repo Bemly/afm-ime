@@ -397,6 +397,11 @@ struct DropletOverlayView: View {
     var marginH: CGFloat
     var marginV: CGFloat
 
+    /// 按压鼓起/松开回弹的过冲贝塞尔(材质反弹 cubic-bezier(0.3, 0.2, 0.2, 1.4),y1>1 过冲)。
+    /// 挂在 press 变化上:抓取瞬间 press 0→1 与位置跳变同事务 → 鼓起与「游到按压处候选」一并走此曲线;
+    /// 拖拽跟手期 press 恒为 1 不触发 → 位置保持 1:1 直跟不脱手。
+    private static let pressCurve = Animation.timingCurve(0.3, 0.2, 0.2, 1.4, duration: 0.32)
+
     var body: some View {
         let _ = { // 交互期实际绘制值(渲染层真值);打字刷新期 body 高频重估,静默防刷屏
             if model.dragFraction != nil || model.press > 0 {
@@ -413,6 +418,7 @@ struct DropletOverlayView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .offset(x: marginH, y: marginV) // 宿主覆盖全面板,内容坐标为玻璃条内坐标
         .allowsHitTesting(false)
+        .animation(Self.pressCurve, value: model.press)
     }
 
     /// 玻璃水滴本体(26+ 系统玻璃/<26 白色半透明)+ 投影
