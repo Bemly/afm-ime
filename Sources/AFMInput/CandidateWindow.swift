@@ -490,7 +490,7 @@ private struct CandidateGridView: View {
     var onCollapse: () -> Void
     private let cols = 8        // 8 列固定窗口(与 InputController.gridColumns 一致)
     private let visibleRows = 4 // 可见行数(与 InputController.gridVisibleRows 一致)
-    private let rowPitch: CGFloat = 27 // 行距 = 格高 26 + Grid 垂直间距 1(gridCell 固定高)
+    private let rowPitch: CGFloat = 29 // 行距 = 格高 28(gridCell 固定高,CJK 行高偏大必须钉死) + Grid 垂直间距 1
 
     var body: some View {
         let allRows = stride(from: 0, to: items.count, by: cols)
@@ -559,6 +559,9 @@ private struct CandidateGridView: View {
         droplet.gridTopRow = top
         let y = CGFloat(top) * rowPitch
         DebugLog.log("网格滚动跟随 top=\(top) y=\(Int(y))")
+        if let f0 = droplet.frames[0], let f1 = droplet.frames[cols] {
+            DebugLog.log("网格实测行距 \(String(format: "%.1f", f1.minY - f0.minY)) (预算 \(Int(rowPitch)))") // 现场校验钉死高度是否生效
+        }
         withAnimation(.spring(response: 0.22, dampingFraction: 1)) { // 跟随带滑动动画,不闪现
             droplet.gridScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
         }
@@ -581,7 +584,9 @@ private struct CandidateGridView: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
-        .frame(minWidth: 62, idealHeight: 26, alignment: .leading)
+        // 高度必须固定: 行距/视口高/滚动偏移全按 rowPitch 闭合估算,idealHeight 不钉死会导致
+        // 实际行距偏大 → 滚到底够不着最后一行、视口底部裁出半行(表现为候选词重叠)
+        .frame(minWidth: 62, minHeight: 28, maxHeight: 28, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
