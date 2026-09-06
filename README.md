@@ -20,13 +20,15 @@ macOS 液态玻璃(Liquid Glass)风格中文拼音输入法,端侧 Apple Foundat
   - *整句预测*:长拼音词典覆盖不住时,光标处显示"整句预测中"占位,模型输出整句插入(无词典候选时为第 1 位)
 - **拼音切分与模糊音**:音节树 + 最多 12 路切分枚举,尾部不完整音节实时匹配;模糊拼音 zh/z、ch/c、sh/s、an/ang、en/eng、in/ing(含 ian↔iang、uan↔uang)双向模糊,精确拼音候选永远优先;简拼(nh→女孩)与全拼混输(n+hao→你好);词格 DP 整句组词(长句直出整句候选)
 
+- **控制中心 App**:`AFM拼音.app`(build 产物,液态玻璃界面)——一键安装/更新输入法、浏览 698 万词库(拼音搜索+权重)、查看/管理用户词权重(打分/词频乘数)、设置(模糊拼音/全角标点/FM 增强/词频学习/候选字号),改动即时生效
+
 ## 构建 / 安装
 
 ```sh
 scripts/build_dict.sh       # 词库源变更后全量重编 Data/dict.bin(rime-ice+外部词库+梗合集)
 scripts/package.sh          # xcodebuild(Xcode 工具链,macOS 27 SDK)+ Metal shader → default.metallib
                             # 无 Xcode 时自动回退 swift build(CLT),水滴退化为无折射
-open build/AFM拼音安装器.app # GUI:一键 安装→启用→选中
+open build/AFM拼音.app # 控制中心:一键安装/更新 + 词库/用户词/设置(液态玻璃)
 ```
 
 首次安装需要**注销并重新登录一次**(TIS 登录扫描收录,详见 AGENTS.md);之后装卸永久生效。
@@ -57,7 +59,7 @@ scripts/debug.sh --stop # 关闭 debug(标志文件 /tmp/afm-ime-debug)
 Sources/
 ├── IMECore/        # 词库(DictStore mmap)、拼音切分、候选引擎、TIS 安装器、debug 日志
 ├── AFMInput/       # 输入法主体(IMKServer/InputController/液态玻璃候选窗/⌃V 剪贴板·⌃F 翻译伴随面板/FM 重排)+ 安装 CLI
-├── AFMInstaller/   # 安装器 GUI(安装→一键注销→重登完成启用)
+├── AFMApp/         # GUI 控制中心(安装/词库浏览/用户词权重/设置,液态玻璃;内嵌引擎 bundle)
 ├── DictCompiler/   # 多源词库 → dict.bin 编译器(rime yaml/撇号拼音/词频 TSV/源码提取/markdown)
 └── DictBench/      # 词库加载/查询基准(含各外部词库源回归查询)
 vendor/             # 词库源:rime-ice + 萌娘百科/zhwiki/minecraft/蔚蓝档案/THUOCL/ali-words
