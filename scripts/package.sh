@@ -74,6 +74,8 @@ fi
 # 设置中心作为 helper 嵌在 Contents/PlugIns/AFMSettings.app(经输入法菜单「设置…」打开,
 # 顶层只有一个 App 条目,Launchpad/Spotlight 不再出现双 AFM)
 APP="build/AFM拼音.app"
+# 清理历史产物(改名/合并后残留的旧 bundle 会被 LaunchServices 索引成幽灵条目)
+rm -rf build/AFMInput.app build/AFM拼音安装器.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINDIR/afm-input" "$APP/Contents/MacOS/AFMInput"
