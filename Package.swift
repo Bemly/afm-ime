@@ -13,7 +13,7 @@ let package = Package(
         .executableTarget(name: "providerbench", path: "Sources/ProviderBench"),
         .executableTarget(name: "dbg", dependencies: ["IMECore"], path: "Sources/Debug"),
         .executableTarget(name: "afm-input", dependencies: ["IMECore"], path: "Sources/AFMInput"),
-        .executableTarget(name: "afm-installer", dependencies: ["IMECore"], path: "Sources/AFMInstaller"),
+        .executableTarget(name: "afm-app", dependencies: ["IMECore"], path: "Sources/AFMApp"),
     ],
     swiftLanguageModes: [.v5]
 )

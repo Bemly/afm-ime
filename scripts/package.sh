@@ -1,5 +1,6 @@
 #!/bin/zsh
-# 打包 AFM拼音.app 并安装到 ~/Library/Input Methods
+# 打包: 输入法引擎 build/AFMInput.app(部署到 ~/Library/Input Methods/AFM拼音.app)
+#      + GUI 控制中心 build/AFM拼音.app(安装器+词库+用户词+设置,内嵌引擎)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -55,7 +56,9 @@ else
   echo "!! 未找到 Xcode(DEVELOPER_DIR 未设且 /Applications 无 Xcode*.app)——跳过 Metal shader,水滴将无折射"
 fi
 
-APP="build/AFM拼音.app"
+# 输入法引擎 bundle: build/AFMInput.app(部署到 ~/Library/Input Methods/AFM拼音.app,文件名无关紧要,
+# TIS 按 bundle id 识别;GUI app 叫 AFM拼音.app,避免 build 目录同名冲突)
+APP="build/AFMInput.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINDIR/afm-input" "$APP/Contents/MacOS/AFMInput"
@@ -129,30 +132,32 @@ PLIST
 codesign --force --sign "$SIGN_ID" "$APP"
 echo "打包完成: $APP (签名: $SIGN_ID)"
 
-# 安装器 App(内嵌 IME,一键安装+启用+直达输入源设置)
-INSTALLER="build/AFM拼音安装器.app"
-rm -rf "$INSTALLER"
-mkdir -p "$INSTALLER/Contents/MacOS" "$INSTALLER/Contents/Resources"
-cp "$BINDIR/afm-installer" "$INSTALLER/Contents/MacOS/AFMInstaller"
-cp -R "$APP" "$INSTALLER/Contents/Resources/"
-cp Data/appicon.tiff "$INSTALLER/Contents/Resources/appicon.tiff"
-cat > "$INSTALLER/Contents/Info.plist" <<'PLIST'
+# GUI 控制中心 App: build/AFM拼音.app(内嵌输入法引擎;安装器 + 词库浏览 + 用户词权重 + 设置,液态玻璃)
+GUI="build/AFM拼音.app"
+rm -rf "$GUI"
+mkdir -p "$GUI/Contents/MacOS" "$GUI/Contents/Resources"
+cp "$BINDIR/afm-app" "$GUI/Contents/MacOS/AFMApp"
+cp -R "$APP" "$GUI/Contents/Resources/AFM拼音.app"
+[ -f Data/appicon.tiff ] && cp Data/appicon.tiff "$GUI/Contents/Resources/appicon.tiff"
+cat > "$GUI/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleExecutable</key><string>AFMInstaller</string>
-	<key>CFBundleIdentifier</key><string>com.afm.afmpinyin.installer</string>
+	<key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
+	<key>CFBundleExecutable</key><string>AFMApp</string>
+	<key>CFBundleIdentifier</key><string>moe.bemly.AFMApp</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-	<key>CFBundleName</key><string>AFM拼音安装器</string>
-	<key>CFBundleDisplayName</key><string>AFM拼音安装器</string>
+	<key>CFBundleName</key><string>AFM拼音</string>
+	<key>CFBundleDisplayName</key><string>AFM拼音</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
 	<key>CFBundleVersion</key><string>20260906</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
-	<key>LSMinimumSystemVersion</key><string>13.0</string>
+	<key>NSHighResolutionCapable</key><true/>
+	<key>LSMinimumSystemVersion</key><string>27.0</string>
 </dict>
 </plist>
 PLIST
-codesign --force --sign "$SIGN_ID" "$INSTALLER"
-echo "打包完成: $INSTALLER"
+codesign --force --sign "$SIGN_ID" "$GUI"
+echo "打包完成: $GUI (签名: $SIGN_ID)"
