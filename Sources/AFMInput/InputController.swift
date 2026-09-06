@@ -252,14 +252,15 @@ final class InputController: IMKInputController {
             }
             return true
 
-        case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 数字选词: 全局位次(条内 1-8,网格 1-9;shift+数字=符号,不选词)
+        case (49...57).contains(effScalar.value) where !candidates.isEmpty: // 数字选词: 条=全局 1-8;网格=水滴所在行内 1-8(shift+数字=符号,不选词)
             let d = Int(effScalar.value) - 49
-            if d < (gridExpanded ? 9 : Self.perPage), d < candidates.count {
-                DebugLog.log("数字 \(d + 1) → 上屏 idx=\(d)")
-                commitCandidate(at: d, client: client)
+            let idx = gridExpanded ? (selectedIndex / Self.gridColumns) * Self.gridColumns + d : d
+            if d < (gridExpanded ? Self.gridColumns : Self.perPage), idx < candidates.count {
+                DebugLog.log("数字 \(d + 1) → 上屏 idx=\(idx) 网格=\(gridExpanded)")
+                commitCandidate(at: idx, client: client)
                 return true
             }
-            DebugLog.log("数字越界 idx=\(d),放行")
+            DebugLog.log("数字越界 idx=\(idx),放行")
             return false
 
         case event.keyCode == 51 where composing: // 退格键(keyCode 51)
@@ -717,7 +718,7 @@ final class InputController: IMKInputController {
                         DebugLog.log("FM 整句过期丢弃 gen=\(gen)")
                         return
                     }
-                    DebugLog.log("FM 整句生效 gen=\(gen): '\(sentence)' 置顶 ✦")
+                    DebugLog.log("FM 整句生效 gen=\(gen): '\(sentence)' → 第2位 ✦")
                     self.applyAISentence(sentence)
                 }
             } else {
@@ -731,30 +732,31 @@ final class InputController: IMKInputController {
                         DebugLog.log("FM 结果过期丢弃 gen=\(gen)")
                         return
                     }
-                    DebugLog.log("FM 生效 gen=\(gen): '\(texts[best])' 置顶 ✦")
+                    DebugLog.log("FM 生效 gen=\(gen): '\(texts[best])' → 第2位 ✦")
                     self.applyAIRerank(text: texts[best])
                 }
             }
         }
     }
 
-    /// 把 FM 选中的词移到首位并标记 ✦
+    /// 把 FM 选中的词移到第 2 位并标记 ✦——不占第 1:FM 到达瞬间若顶掉首选,
+    /// 按惯性直接空格会把"突然换掉的词"打出去;放第 2 位让用户主动选
     private func applyAIRerank(text: String) {
-        guard let idx = candidates.firstIndex(where: { $0.text == text }), idx > 0 else { return }
-        let picked = candidates.remove(at: idx)
-        candidates.insert(picked, at: 0)
-        aiBoostText = picked.text
-        selectedIndex = 0
+        guard let idx = candidates.firstIndex(where: { $0.text == text }) else { return }
+        if idx > 1 {
+            let picked = candidates.remove(at: idx)
+            candidates.insert(picked, at: min(1, candidates.count))
+        }
+        aiBoostText = text
         updateCandidateWindow(client())
     }
 
-    /// 把 FM 整句预测结果作为首个候选(✦),空格/1 直接上屏
+    /// FM 整句预测结果插到第 2 位(✦),不顶掉词典首选;理由同 applyAIRerank
     private func applyAISentence(_ sentence: String) {
         guard !candidates.contains(where: { $0.text == sentence }) else { return }
         let cand = CandidateEngine.Candidate(text: sentence, pinyin: "(AI 整句)", score: .greatestFiniteMagnitude)
-        candidates.insert(cand, at: 0)
+        candidates.insert(cand, at: min(1, candidates.count)) // 无词典候选时即第 1 位
         aiBoostText = sentence
-        selectedIndex = 0
         updateCandidateWindow(client())
     }
 

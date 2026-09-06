@@ -52,14 +52,25 @@ final class CandidateDropletModel: ObservableObject {
 
     // 产出(overlay 直接渲染)
     @Published var blobFrame: CGRect? = nil       // 水滴最终 frame(含缩放/挤压)
-    /// 网格/翻译/占位等非候选条形态:水滴整体隐藏
+    @Published var cellFrame: CGRect? = nil       // 选中格原始 frame(网格态幽灵字对齐用)
+    /// 翻译/占位等非候选形态:水滴整体隐藏(网格态保留水滴作选中指示)
     var suppressed = false
+    /// 网格态: 水滴贴合选中格(尺寸/定位不同于条态),几何按全量 frame 查找
+    var gridMode = false
+    /// 网格滚动位置(ScrollPosition 按偏移驱动,绕开 scrollTo 对 Grid 内容的空操作;
+    /// CLT 禁 @State,持久宿主放本模型)
+    var gridScrollPosition = ScrollPosition()
+    /// 网格当前滚动到的顶行(边缘跟随计算用;滚轮自由滚动时不追踪,选中移动时公式自校正)
+    var gridTopRow = 0
+    /// 网格滚动视口 frame(candBar 坐标;滚动帧间竞态时水滴钳回视口防跳出候选框)
+    var gridViewport: CGRect? = nil
 
-    func applyLayout(items: [CandidateItem], barGlassHeight: CGFloat, selectedIndex: Int) {
+    func applyLayout(items: [CandidateItem], barGlassHeight: CGFloat, selectedIndex: Int, expanded: Bool) {
         self.items = items
         self.itemCount = items.count
         self.barGlassHeight = barGlassHeight
         self.selectedIndex = selectedIndex
+        gridMode = expanded
         recompute()
     }
 
@@ -122,9 +133,9 @@ final class CandidateDropletModel: ObservableObject {
 
     // MARK: 几何与渲染
 
-    /// 条恒显前 8 个(无滑动窗口)
+    /// 条=恒显前 8 个;网格=全部(水滴按选中格定位,拖拽仅存在于条态)
     private var windowIndices: Range<Int> {
-        0..<min(8, max(0, itemCount))
+        gridMode ? 0..<max(0, itemCount) : 0..<min(8, max(0, itemCount))
     }
 
     private var currentCellFrame: CGRect? {
@@ -175,15 +186,22 @@ final class CandidateDropletModel: ObservableObject {
     /// 重算水滴几何(折射由 overlay 的 layerEffect 直接在幽灵层上做,模型只管几何)
     func recompute() {
         guard !suppressed,
-              let cell = interpolatedFrame(at: dragFraction ?? Double(selectedIndex)) else {
+              var cell = interpolatedFrame(at: dragFraction ?? Double(selectedIndex)) else {
             if blobFrame != nil {
                 DebugLog.log("水滴几何 → 隐藏 suppressed=\(suppressed) frac=\(dragFraction.map { String(format: "%.2f", $0) } ?? "nil")")
             }
             blobFrame = nil
+            cellFrame = nil
             return
         }
-        // 静止尺寸: 高度 ≈ 0.875×玻璃条(Kyant0 水滴 56/条 64),宽 = cell + 6
-        let restH = min(barGlassHeight * 0.875, barGlassHeight - 2)
+        // 网格态: 滚动跟随存在帧间竞态(选中格新 frame 尚未随滚动重报,旧值可能在视口外),
+        // 把水滴钳回滚动视口,瞬态也不出候选框
+        if gridMode, let vp = gridViewport, vp.width > 0, cell.height > 0 {
+            cell.origin.y = min(max(cell.origin.y, vp.minY), vp.maxY - cell.height)
+        }
+        // 静止尺寸: 条=高 ≈0.875×玻璃条(Kyant0 水滴 56/条 64),宽 = cell + 6;网格=贴合选中格
+        let restH = gridMode ? min(cell.height + 2, barGlassHeight - 2)
+                             : min(barGlassHeight * 0.875, barGlassHeight - 2)
         let restW = cell.width + 6
         let rest = CGRect(x: cell.midX - restW / 2, y: cell.midY - restH / 2, width: restW, height: restH)
         // 按压放大 1.35×(Kyant0 pressedScale 78/56)+ 速度挤压拉伸(layerBlock 同款公式)
@@ -192,6 +210,7 @@ final class CandidateDropletModel: ObservableObject {
         let sx = pressScale / (1 - max(-0.2, min(0.2, v * 0.075)))
         let sy = pressScale * (1 - max(-0.2, min(0.2, v * 0.025)))
         blobFrame = rest.scaledAboutCenter(sx: sx, sy: sy)
+        cellFrame = cell
         if dragFraction != nil || press > 0 { // 交互期几何(静止布局期 8 个 cell 回写会刷屏,不记)
             DebugLog.log("水滴几何 frac=\(String(format: "%.2f", dragFraction ?? Double(selectedIndex))) sel=\(selectedIndex) cell=\(NSStringFromRect(cell)) blob=\(NSStringFromRect(blobFrame!))")
         }
@@ -214,9 +233,6 @@ struct CandidateBarView: View {
     var onSelect: (Int) -> Void
     var onToggleExpand: () -> Void  // ▾/▴ 展开收起网格
 
-    // 网格选中格 glassEffectID 流动变形用;@Namespace 非宏包装器,CLT 环境可用
-    @Namespace private var glassNS
-
     var body: some View {
         Group {
             if isLoading && items.isEmpty {
@@ -232,7 +248,7 @@ struct CandidateBarView: View {
             } else if let t = translation {
                 translationRow(t)
             } else if expanded {
-                CandidateGridView(items: items, selectedIndex: selectedIndex, ns: glassNS,
+                CandidateGridView(items: items, selectedIndex: selectedIndex, droplet: droplet,
                                   onSelect: onSelect, onCollapse: onToggleExpand)
             } else {
                 barView
@@ -394,7 +410,11 @@ struct DropletOverlayView: View {
         ZStack(alignment: .topLeading) {
             if let f = model.blobFrame {
                 blobGlass(f)
-                ghostRefracted(f)
+                if model.gridMode {
+                    gridGhostCell() // 玻璃磨砂会糊掉底下的格内容,水滴上层重绘选中格(强调色)
+                } else {
+                    ghostRefracted(f)
+                }
                 blobDressing(f)
             }
         }
@@ -402,7 +422,7 @@ struct DropletOverlayView: View {
         .offset(x: marginH, y: marginV) // 宿主覆盖全面板,内容坐标为玻璃条内坐标
         .allowsHitTesting(false)
         .animation(Self.pressCurve, value: model.press)
-        .animation(model.dragFraction == nil ? Self.slideCurve : nil, value: model.blobFrame?.minX)
+        .animation(model.dragFraction == nil ? Self.slideCurve : nil, value: model.blobFrame?.origin)
     }
 
     /// 玻璃水滴本体(26+ 系统玻璃/<26 白色半透明)+ 投影
@@ -430,6 +450,19 @@ struct DropletOverlayView: View {
         }
     }
 
+    /// 网格态幽灵字: 选中格内容以强调色重绘在水滴上层,frame 对齐原格(同条态幽灵行,无折射)
+    @ViewBuilder private func gridGhostCell() -> some View {
+        if let cf = model.cellFrame,
+           let item = model.items.first(where: { $0.index == model.selectedIndex }) {
+            CandidateCell(item: item,
+                          number: item.isAI ? "\u{F8FF}" : "\(item.index + 1)",
+                          active: true, ghost: true)
+                .frame(width: cf.width, height: cf.height)
+                .offset(x: cf.minX, y: cf.minY)
+                .allowsHitTesting(false)
+        }
+    }
+
     /// 表面处理: 容器色 + 上缘高光(Kyant0 onDrawSurface/Highlight,强度随按压)
     @ViewBuilder private func blobDressing(_ f: CGRect) -> some View {
         Capsule()
@@ -451,7 +484,7 @@ struct DropletOverlayView: View {
 private struct CandidateGridView: View {
     var items: [CandidateItem]
     var selectedIndex: Int
-    var ns: Namespace.ID?   // 选中格玻璃流动变形
+    @ObservedObject var droplet: CandidateDropletModel // 格 frame 回写(水滴在网格态作选中指示,随 ←→↑↓ 游动)
     var onSelect: (Int) -> Void
     var onCollapse: () -> Void
     private let cols = 8        // 8 列固定窗口(与 InputController.gridColumns 一致)
@@ -480,39 +513,59 @@ private struct CandidateGridView: View {
         }
     }
 
-    /// 真滚动容器: 鼠标滚轮与滚动条直接控制;←→↑↓ 移动选中时最小滚动量滚入可见区
+    /// 真滚动容器: 鼠标滚轮与滚动条直接控制;←→↑↓ 移动选中时按行距绝对偏移滚到目标行。
+    /// (ScrollViewReader.scrollTo 对 Grid 内容是空操作——实测日志证明 onChange 有触发但不滚动,
+    ///  故用 ScrollPosition 按偏移量驱动,与视图 id 无关)
     private func scrollGrid(_ allRows: [[CandidateItem]]) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical) {
-                Grid(alignment: .leading, horizontalSpacing: 2, verticalSpacing: 1) {
-                    ForEach(allRows.indices, id: \.self) { r in
-                        GridRow {
-                            ForEach(allRows[r]) { item in
-                                gridCell(item)
-                                    .onTapGesture { onSelect(item.index) }
-                            }
+        ScrollView(.vertical) {
+            Grid(alignment: .leading, horizontalSpacing: 2, verticalSpacing: 1) {
+                ForEach(allRows.indices, id: \.self) { r in
+                    GridRow {
+                        ForEach(allRows[r]) { item in
+                            gridCell(item)
+                                .onTapGesture { onSelect(item.index) }
+                                .modifier(FrameReporter(index: item.index, model: droplet))
                         }
-                        .id(r)
                     }
-                }
-                .padding(1)
-            }
-            .scrollIndicators(.visible)
-            .frame(height: CGFloat(min(allRows.count, visibleRows)) * rowPitch - 1)
-            .onChange(of: selectedIndex) { tgt in
-                withAnimation(.spring(response: 0.25, dampingFraction: 1)) {
-                    proxy.scrollTo(tgt / cols, anchor: nil)
+                    .id(r)
                 }
             }
-            .onAppear {
-                proxy.scrollTo(selectedIndex / cols, anchor: nil)
-            }
+            .padding(1)
+        }
+        .scrollPosition($droplet.gridScrollPosition)
+        .scrollIndicators(.visible)
+        .frame(height: CGFloat(min(allRows.count, visibleRows)) * rowPitch - 1)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("candBar")) } action: { _, new in
+            droplet.gridViewport = new // 视口 frame(水滴越界瞬态钳回用)
+        }
+        .onChange(of: selectedIndex) { _, tgt in
+            scrollToSelectedRow(tgt)
+        }
+        .onAppear {
+            scrollToSelectedRow(selectedIndex)
         }
     }
 
+    /// 边缘跟随: 选中行在可视窗口内不滚动;↓ 越出底行 → 贴底(只出新的一行),↑ 越出顶行 → 贴顶(只出旧的一行)
+    private func scrollToSelectedRow(_ tgt: Int) {
+        let row = tgt / cols
+        var top = droplet.gridTopRow
+        if row < top {
+            top = row
+        } else if row >= top + visibleRows {
+            top = row - visibleRows + 1
+        }
+        droplet.gridTopRow = top
+        let y = CGFloat(top) * rowPitch
+        DebugLog.log("网格滚动跟随 top=\(top) y=\(Int(y))")
+        droplet.gridScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+    }
+
     private func gridCell(_ item: CandidateItem) -> some View {
-        HStack(spacing: 4) {
-            Text(item.isAI ? "\u{F8FF}" : "\(item.index + 1)")
+        let selRow = selectedIndex / cols
+        let inSelRow = item.index / cols == selRow // 仅水滴所在行显示行内编号 1-8
+        return HStack(spacing: 4) {
+            Text(item.isAI ? "\u{F8FF}" : (inSelRow ? "\(item.index - selRow * cols + 1)" : ""))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(item.isAI ? AnyShapeStyle(.cyan) : AnyShapeStyle(.secondary))
                 .frame(width: 16)
@@ -526,36 +579,7 @@ private struct CandidateGridView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .frame(minWidth: 62, idealHeight: 26, alignment: .leading)
-        .modifier(LiquidGlassPill(selected: item.index == selectedIndex,
-                                  id: item.index, ns: ns))
         .contentShape(Rectangle())
-    }
-}
-
-/// 玻璃形状容器(macOS 26+): 让容器内的选中胶囊与其他玻璃形状融合,配合 glassEffectID
-/// 实现形状间流动变形;<26 直接渲染
-fileprivate func glassFlowContainer(@ViewBuilder _ content: () -> some View) -> some View {
-    GlassEffectContainer(spacing: 4) { content() }
-}
-
-/// 网格选中格的液态玻璃胶囊(macOS 26+ 系统 glassEffect,同系统候选窗/工具栏质感;
-/// <26 退回白色半透明填充)
-private struct LiquidGlassPill: ViewModifier {
-    let selected: Bool
-    let id: Int
-    var ns: Namespace.ID?
-
-    func body(content: Content) -> some View {
-        if selected {
-            if let ns {
-                content.glassEffect(.regular.interactive(), in: Capsule())
-                    .glassEffectID(id, in: ns)
-            } else {
-                content.glassEffect(.regular.interactive(), in: Capsule())
-            }
-        } else {
-            content
-        }
     }
 }
 
@@ -563,8 +587,8 @@ private struct LiquidGlassPill: ViewModifier {
 
 /// 结构(为水滴"胀出条外"预留边距): 面板 = 容器(透明,含边距)
 ///   ├─ 玻璃视窗(NSGlassEffectView,26+;即候选条本体矩形) / <26 直接放宿主
-///   │    └─ 候选条宿主(SwiftUI: 滑动窗口内容 + 手势)
-///   └─ 水滴覆盖宿主(全面板,SwiftUI 玻璃胶囊 + CI 折射图;hitTest 全透传)
+///   │    └─ 候选条宿主(SwiftUI: 前 8 个候选 + 手势;网格态 = 滚动网格)
+///   └─ 水滴覆盖宿主(全面板,SwiftUI 玻璃胶囊 + Metal 折射幽灵层;hitTest 全透传)
 /// onFrameChange 回报**玻璃条矩形**(伴随面板定位锚点)。
 final class CandidateWindowController {
     static let marginH: CGFloat = 10
@@ -670,10 +694,11 @@ final class CandidateWindowController {
         panel.orderFront(nil)
         DebugLog.log("水滴布局 panel=\(NSStringFromRect(panel.frame)) container=\(NSStringFromRect(container.frame)) glass=\(NSStringFromRect((glassView ?? barHosting)?.frame ?? .null)) overlay=\(NSStringFromRect(overlayHosting?.frame ?? .null)) row=\(NSStringFromRect(droplet.rowFrame))")
 
-        // 水滴布局输入(折射由 overlay 的 Metal layerEffect 直接做)
-        droplet.suppressed = expanded || translation != nil || isLoading
+        // 水滴布局输入(折射由 overlay 的 Metal layerEffect 直接做;网格态水滴作选中指示)
+        droplet.suppressed = translation != nil || isLoading
         droplet.applyLayout(items: items,
-                            barGlassHeight: barSize.height, selectedIndex: selectedIndex)
+                            barGlassHeight: barSize.height, selectedIndex: selectedIndex,
+                            expanded: expanded)
 
         let barFrame = panel.frame.offsetBy(dx: Self.marginH, dy: Self.marginV)
         onFrameChange?(NSRect(origin: barFrame.origin, size: barSize))
