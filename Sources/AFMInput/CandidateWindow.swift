@@ -450,12 +450,13 @@ struct DropletOverlayView: View {
         }
     }
 
-    /// 网格态幽灵字: 选中格内容以强调色重绘在水滴上层,frame 对齐原格(同条态幽灵行,无折射)
+    /// 网格态幽灵字: 选中格内容以强调色重绘在水滴上层,frame 对齐原格(同条态幽灵行,无折射)。
+    /// 编号与格子一致用行内 1-8(全局序号键盘敲不出来,没意义)
     @ViewBuilder private func gridGhostCell() -> some View {
         if let cf = model.cellFrame,
            let item = model.items.first(where: { $0.index == model.selectedIndex }) {
             CandidateCell(item: item,
-                          number: item.isAI ? "\u{F8FF}" : "\(item.index + 1)",
+                          number: item.isAI ? "\u{F8FF}" : "\(model.selectedIndex % 8 + 1)",
                           active: true, ghost: true)
                 .frame(width: cf.width, height: cf.height)
                 .offset(x: cf.minX, y: cf.minY)
@@ -558,7 +559,9 @@ private struct CandidateGridView: View {
         droplet.gridTopRow = top
         let y = CGFloat(top) * rowPitch
         DebugLog.log("网格滚动跟随 top=\(top) y=\(Int(y))")
-        droplet.gridScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+        withAnimation(.spring(response: 0.22, dampingFraction: 1)) { // 跟随带滑动动画,不闪现
+            droplet.gridScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+        }
     }
 
     private func gridCell(_ item: CandidateItem) -> some View {
