@@ -60,8 +60,7 @@ public final class UserFreq {
     }
 
     /// 用户词库命中: 词条拼音与 key 完全一致;partialPrefix 时允许词条拼音以 key 为前缀(尾音节未打全);
-    /// 另收简拼(key == 各音节首字母连接)。前缀经二分查找,复杂度 O(log n + 命中数)。
-    /// 开关门控在引擎调用点(查询入口快照一次,防热循环里逐调用读 UserDefaults)
+    /// 另收简拼(key == 各音节首字母连接)。前缀经二分查找,复杂度 O(log n + 命中数)
     public func hits(key: String, partialPrefix: Bool) -> [(word: String, pinyin: String, count: Int)] {
         if indexDirty { rebuildIndex() }
         var out: [(word: String, pinyin: String, count: Int)] = []
@@ -107,10 +106,9 @@ public final class UserFreq {
         return out
     }
 
-    /// 打分乘数(词频层): 仅 ≥2 字词参与(了/的/是这类高频虚词不被个人词频顶掉),封顶 ×3;
-    /// enabled 由引擎查询入口快照传入(防逐候选读 UserDefaults,热循环实测 +80% 的教训)
-    public func boost(_ word: String, enabled: Bool = true) -> Double {
-        guard enabled, word.count >= 2, let c = counts[word], c > 0 else { return 1.0 }
+    /// 打分乘数(词频层): 仅 ≥2 字词参与(了/的/是这类高频虚词不被个人词频顶掉),封顶 ×3
+    public func boost(_ word: String) -> Double {
+        guard word.count >= 2, let c = counts[word], c > 0 else { return 1.0 }
         return min(1 + 0.5 * log10(Double(c) + 1), 3.0)
     }
 
