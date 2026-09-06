@@ -92,17 +92,24 @@ final class CandidateDropletModel: ObservableObject {
         press = 1
         velocity = 0
         dragFraction = fraction(at: x) ?? Double(fallback)
+        let fs = windowIndices.compactMap { i in frames[i].map { "\(i):x\(Int($0.minX))w\(Int($0.width))" } }
+        DebugLog.log("水滴 beginDrag x=\(String(format: "%.1f", x)) → frac=\(String(format: "%.2f", dragFraction ?? -1)) fallback=\(fallback) win=\(windowStart) n=\(itemCount) [\(fs.joined(separator: " "))]")
         recompute()
     }
 
-    func drag(by dx: CGFloat) {
-        guard let base = dragFraction, let f = currentCellFrame, f.width > 1 else { return }
-        let target = base + Double(dx) / Double(f.width)
+    /// 拖拽中: 直接把指针当前位置重映射为连续 fraction(beginDrag 同款 fraction(at:))。
+    /// 【不能用增量累加】手势回调给的是相对起点的累计位移(location-startLocation),
+    /// 若当增量逐事件加到 base 上,fraction 以事件数二次方暴涨——几百 ms 内钳到窗口末位,
+    /// 表现即「按住还没出第一个词水滴就飞到最后一个候选」(kb10 实测日志钉死)。
+    func drag(toX x: CGFloat) {
+        guard let base = dragFraction else { return }
+        let target = fraction(at: x) ?? base
         let lo = Double(windowStart)
         let hi = Double(max(windowStart, min(windowStart + 7, itemCount - 1)))
         let clamped = max(lo, min(hi, target))
         let inst = (clamped - base) * 3.0
         velocity = velocity * 0.65 + max(-1, min(1, inst)) * 0.35
+        DebugLog.log("水滴 drag toX=\(String(format: "%.1f", x)) base=\(String(format: "%.2f", base)) → \(String(format: "%.2f", clamped)) win=\(windowStart) n=\(itemCount)")
         dragFraction = clamped
         recompute()
     }
@@ -171,6 +178,9 @@ final class CandidateDropletModel: ObservableObject {
     func recompute() {
         guard !suppressed,
               let cell = interpolatedFrame(at: dragFraction ?? Double(selectedIndex)) else {
+            if blobFrame != nil {
+                DebugLog.log("水滴几何 → 隐藏 suppressed=\(suppressed) frac=\(dragFraction.map { String(format: "%.2f", $0) } ?? "nil")")
+            }
             blobFrame = nil
             return
         }
@@ -184,6 +194,9 @@ final class CandidateDropletModel: ObservableObject {
         let sx = pressScale / (1 - max(-0.2, min(0.2, v * 0.075)))
         let sy = pressScale * (1 - max(-0.2, min(0.2, v * 0.025)))
         blobFrame = rest.scaledAboutCenter(sx: sx, sy: sy)
+        if dragFraction != nil || press > 0 { // 交互期几何(静止布局期 8 个 cell 回写会刷屏,不记)
+            DebugLog.log("水滴几何 frac=\(String(format: "%.2f", dragFraction ?? Double(selectedIndex))) sel=\(selectedIndex) win=\(windowStart) cell=\(NSStringFromRect(cell)) blob=\(NSStringFromRect(blobFrame!))")
+        }
     }
 }
 
@@ -267,7 +280,7 @@ struct CandidateBarView: View {
                 if droplet.dragFraction == nil {
                     droplet.beginDrag(atX: v.startLocation.x, fallback: selectedIndex)
                 } else {
-                    droplet.drag(by: v.location.x - v.startLocation.x)
+                    droplet.drag(toX: v.location.x)
                 }
             }
             .onEnded { _ in droplet.endDrag() }
@@ -385,6 +398,11 @@ struct DropletOverlayView: View {
     var marginV: CGFloat
 
     var body: some View {
+        let _ = { // 交互期实际绘制值(渲染层真值);打字刷新期 body 高频重估,静默防刷屏
+            if model.dragFraction != nil || model.press > 0 {
+                DebugLog.log("水滴渲染 blobFrame=\(model.blobFrame.map { NSStringFromRect($0) } ?? "nil")")
+            }
+        }()
         ZStack(alignment: .topLeading) {
             if let f = model.blobFrame {
                 blobGlass(f)
@@ -662,6 +680,7 @@ final class CandidateWindowController {
         }
         panel.setFrameOrigin(NSPoint(x: barOrigin.x - Self.marginH, y: barOrigin.y - Self.marginV))
         panel.orderFront(nil)
+        DebugLog.log("水滴布局 panel=\(NSStringFromRect(panel.frame)) container=\(NSStringFromRect(container.frame)) glass=\(NSStringFromRect((glassView ?? barHosting)?.frame ?? .null)) overlay=\(NSStringFromRect(overlayHosting?.frame ?? .null)) row=\(NSStringFromRect(droplet.rowFrame))")
 
         // 水滴布局输入(折射由 overlay 的 Metal layerEffect 直接做)
         droplet.suppressed = expanded || translation != nil || isLoading
