@@ -64,6 +64,41 @@ cp Data/dict.bin "$APP/Contents/Resources/dict.bin"
 [ -f Data/icon.tiff ] && cp Data/icon.tiff "$APP/Contents/Resources/icon.tiff"
 [ -f Data/appicon.tiff ] && cp Data/appicon.tiff "$APP/Contents/Resources/appicon.tiff"
 
+# Preferences.prefPane(系统设置 → 键盘 → AFM拼音 详情页内嵌设置):需要 Xcode 工具链编译
+# (CLT SDK 不带 PreferencePanes 头);缺失/失败时跳过——系统设置里不出设置页,IME 本体不受影响
+PANE="$APP/Contents/Resources/Preferences.prefPane"
+if [ -n "$XDEV" ] && [ -d "$XDEV" ]; then
+  mkdir -p "$PANE/Contents/MacOS"
+  if DEVELOPER_DIR="$XDEV" xcrun -sdk macosx swiftc -parse-as-library -emit-library -Xlinker -bundle \
+       -target arm64-apple-macos27.0 \
+       -framework AppKit -framework PreferencePanes \
+       PrefsPane/AFMPrefsPane.swift -o "$PANE/Contents/MacOS/AFMPrefs"; then
+    cat > "$PANE/Contents/Info.plist" <<'PANEPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
+	<key>CFBundleExecutable</key><string>AFMPrefs</string>
+	<key>CFBundleIdentifier</key><string>moe.bemly.inputmethod.AfmIME.Preferences</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>AFMPrefs</string>
+	<key>CFBundlePackageType</key><string>BNDL</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
+	<key>CFBundleVersion</key><string>20260906</string>
+	<key>NSPrincipalClass</key><string>AFMPrefsPane</string>
+</dict>
+</plist>
+PANEPLIST
+    echo "设置面板编译完成: Preferences.prefPane"
+  else
+    echo "!! 设置面板编译失败——系统设置中将无 AFM拼音 设置页"
+    rm -rf "$PANE"
+  fi
+else
+  echo "!! 未找到 Xcode——跳过设置面板(CLT SDK 无 PreferencePanes 头)"
+fi
+
 # 输入源显示名:TIS 用「输入源 ID」在 InfoPlist.strings 里查显示名(参考 squirrel InfoPlist.xcstrings)
 for lproj in zh-Hans en; do
   mkdir -p "$APP/Contents/Resources/$lproj.lproj"
@@ -87,8 +122,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>AFM拼音</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>2026.09.05</string>
-	<key>CFBundleVersion</key><string>20260905</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
+	<key>CFBundleVersion</key><string>20260906</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSBackgroundOnly</key><false/>
 	<key>LSUIElement</key><true/>
@@ -147,8 +182,8 @@ cat > "$INSTALLER/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>AFM拼音安装器</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音安装器</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>2026.09.05</string>
-	<key>CFBundleVersion</key><string>20260905</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
+	<key>CFBundleVersion</key><string>20260906</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict>

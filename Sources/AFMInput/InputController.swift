@@ -357,6 +357,16 @@ final class InputController: IMKInputController {
 
     /// 标点处理:命中映射 → (组词中先上屏首选)插入全角,引号成对交替;未映射(-=/ 空格 数字 / 等)按旧逻辑放行
     private func handlePunctuation(_ chars: String, composing: Bool, client: Any!) -> Bool {
+        // 全角标点关(系统设置):映射标点半角原样直通;组词中仍先上屏首选
+        guard UserPrefs.fullWidthPunct else {
+            if composing {
+                DebugLog.log("全角标点关 → 先上屏首选,原样放行 '\(chars)'")
+                flush(candidates.first?.text ?? raw, client: client)
+            } else {
+                DebugLog.log("全角标点关 → 放行 '\(chars)'")
+            }
+            return false
+        }
         let mapped: String?
         switch chars {
         case "'": quoteOpenSingle.toggle(); mapped = quoteOpenSingle ? "‘" : "’"
@@ -461,13 +471,17 @@ final class InputController: IMKInputController {
                                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
 
         if candidates.isEmpty {
-            if raw.count >= 4 {
+            if raw.count >= 4, UserPrefs.fmEnhance {
                 // 无词典候选但 FM 可能出整句:光标处占位等待,不取消推理
                 DebugLog.log("无词典候选(长 \(raw.count))→ 占位等待 FM 整句")
                 updateCandidateWindow(client, loading: true)
                 scheduleFMRerank(client)
             } else {
-                DebugLog.log("无候选且过短 → 隐藏候选窗")
+                if !UserPrefs.fmEnhance {
+                    DebugLog.log("无候选且 FM 增强关 → 隐藏候选窗")
+                } else {
+                    DebugLog.log("无候选且过短 → 隐藏候选窗")
+                }
                 candidateWindow.hide()
             }
         } else {
@@ -696,6 +710,10 @@ final class InputController: IMKInputController {
     // MARK: - FM 异步重排(0.4s 防抖;结果到达时若组词已变则丢弃)
 
     private func scheduleFMRerank(_ client: Any!) {
+        guard UserPrefs.fmEnhance else {
+            DebugLog.log("FM 增强关 → 跳过重排/整句")
+            return
+        }
         fmGeneration &+= 1
         let gen = fmGeneration
         let snapshotRaw = raw
