@@ -106,9 +106,10 @@ public final class UserFreq {
         return out
     }
 
-    /// 打分乘数(词频层): 仅 ≥2 字词参与(了/的/是这类高频虚词不被个人词频顶掉),封顶 ×3
-    public func boost(_ word: String) -> Double {
-        guard word.count >= 2, let c = counts[word], c > 0 else { return 1.0 }
+    /// 打分乘数(词频层): 仅 ≥2 字词参与(了/的/是这类高频虚词不被个人词频顶掉),封顶 ×3;
+    /// enabled 由引擎查询入口快照传入(防逐候选读 UserDefaults,热循环实测 +80% 的教训)
+    public func boost(_ word: String, enabled: Bool = true) -> Double {
+        guard enabled, word.count >= 2, let c = counts[word], c > 0 else { return 1.0 }
         return min(1 + 0.5 * log10(Double(c) + 1), 3.0)
     }
 

@@ -390,17 +390,20 @@ private struct CandidateCell: View {
     var ghost = false         // 幽灵快照样式(强调色,仅水滴折射内可见)
     var gridCell = false
 
+    // 字号: 网格态钉死 14(行距 28/29 几何闭合不能动),条态跟随设置(13-22,默认 16)
+    private var textFontSize: Int { gridCell ? 14 : UserPrefs.candidateFontSize }
+
     var body: some View {
         HStack(spacing: 4) {
             Text(number)
-                .font(.system(size: gridCell ? 10 : 11, weight: .semibold))
+                .font(.system(size: gridCell ? 10 : CGFloat(max(10, textFontSize - 5)), weight: .semibold))
                 .foregroundStyle(ghost
                     ? AnyShapeStyle(.cyan)
                     : (item.isAI ? AnyShapeStyle(.cyan) : AnyShapeStyle(.secondary)))
                 .frame(width: gridCell ? 16 : 9)
                 .baselineOffset(-1)
             Text(item.text)
-                .font(.system(size: gridCell ? 14 : 16, weight: (active || ghost) ? .semibold : .regular))
+                .font(.system(size: CGFloat(textFontSize), weight: (active || ghost) ? .semibold : .regular))
                 .foregroundStyle(.primary)
                 .fixedSize()
                 .lineLimit(1)

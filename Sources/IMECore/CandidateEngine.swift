@@ -36,12 +36,17 @@ public final class CandidateEngine {
         var best: [String: Candidate] = [:]
         var fuzzyVariants: [String] = []
         var userHitCount = 0
+        // 设置快照(每查询读一次 UserDefaults;逐候选读实测热循环 +80%)
+        let fuzzyOn = UserPrefs.fuzzyPinyin
+        let userFreqOn = UserPrefs.userFreq
 
         // 用户词库: 上屏过的词按其拼音键直查(kb26)——最高优先档,「打得越多权重越高」
-        for uh in UserFreq.shared.hits(key: rawInput, partialPrefix: false) {
-            userHitCount += 1
-            best[uh.word] = Candidate(text: uh.word, pinyin: uh.pinyin,
-                                      score: UserFreq.shared.userScore(count: uh.count), isUser: true)
+        if userFreqOn {
+            for uh in UserFreq.shared.hits(key: rawInput, partialPrefix: false) {
+                userHitCount += 1
+                best[uh.word] = Candidate(text: uh.word, pinyin: uh.pinyin,
+                                          score: UserFreq.shared.userScore(count: uh.count), isUser: true)
+            }
         }
 
         // 简拼: 整串字母作为首字母缩写键直查(awsl→啊我死了/阿伟死了,n→你),与音节切分互补;
@@ -75,7 +80,7 @@ public final class CandidateEngine {
             // 模糊拼音: 仅展开前 3 条切分路径,每键变体含原键封顶 8;
             // 模糊命中 ×0.5,保证"首选项是准确拼音"(rime derive 的查询期等价物)
             var queries: [(key: String, factor: Double)] = [(key, 1.0)]
-            if si == 0 {
+            if si == 0, fuzzyOn {
                 for v in Self.fuzzyKeys(syllables: seg.syllables) where v != key {
                     guard queries.count < 8 else { break }
                     queries.append((v, 0.5))
@@ -122,7 +127,7 @@ public final class CandidateEngine {
                 }
                 // 用户词库: 与本键一致的已上屏词直查(缩写展开键放行=简拼混输能命中,模糊变体键不放行);
                 // partialPrefix 允许尾音节未打全(词条拼音以 key 为前缀)
-                if !fuzzyVariants.contains(q.key) {
+                if !fuzzyVariants.contains(q.key), userFreqOn {
                     for uh in UserFreq.shared.hits(key: q.key, partialPrefix: seg.trailingPartial) {
                         segUserHits += 1
                         upsert(Candidate(text: uh.word, pinyin: uh.pinyin,
@@ -132,7 +137,7 @@ public final class CandidateEngine {
             }
             // 宽松兜底: 快路径无命中时逐音节前缀匹配——中间音节没打全(mebengz 的 me⊂mei)与
             // 缩写音节(zhedm 的 d⊂de、m⊂ma)都能命中用户词
-            if segUserHits == 0, seg.trailingPartial || seg.abbrevFlags.contains(true) {
+            if segUserHits == 0, userFreqOn, seg.trailingPartial || seg.abbrevFlags.contains(true) {
                 for uh in UserFreq.shared.looseHits(key: key, limit: 5) {
                     segUserHits += 1
                     upsert(Candidate(text: uh.word, pinyin: uh.pinyin,
@@ -170,14 +175,16 @@ public final class CandidateEngine {
             }
         }
         var ranked = Array(best.values)
-        for i in ranked.indices { ranked[i].score *= UserFreq.shared.boost(ranked[i].text) } // 用户词频: 档内选用越多越靠前
+        for i in ranked.indices { ranked[i].score *= UserFreq.shared.boost(ranked[i].text, enabled: userFreqOn) } // 用户词频: 档内选用越多越靠前
         // 三档排序: 用户词库命中(最高,压过一切词典候选) > 全键覆盖 > 渐进前缀;档内按分数
         func tier(_ c: Candidate) -> Int { c.isUser ? 2 : (c.coversInput ? 1 : 0) }
         let out = Array(ranked.sorted { a, b in
             tier(a) != tier(b) ? tier(a) > tier(b) : a.score > b.score
         }.prefix(limit))
         DebugLog.log("引擎[\(rawInput)] 切分=\(segs.map { $0.syllables.joined(separator: "'") }.joined(separator: " / ")) → \(out.count) 条"
+            + (userFreqOn ? "" : " 用户词库关")
             + (userHitCount > 0 ? " 用户词\(userHitCount)" : "")
+            + (fuzzyOn ? "" : " 模糊关")
             + (fuzzyVariants.isEmpty ? "" : " 模糊=\(fuzzyVariants.joined(separator: ","))")
             + ", \(String(format: "%.2f", -t0.timeIntervalSinceNow * 1000))ms")
         return out

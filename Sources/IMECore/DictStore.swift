@@ -56,6 +56,38 @@ public final class DictStore {
         case corrupt(String)
     }
 
+    /// 存储序记录(key 字节序,同 key 内 weight 降序)——词库浏览用
+    public struct RecordInfo {
+        public var key: String
+        public var word: String
+        public var weight: UInt32
+        public init(key: String, word: String, weight: UInt32) {
+            self.key = key
+            self.word = word
+            self.weight = weight
+        }
+    }
+
+    /// 按记录下标线性遍历(词库浏览分页;O(limit),mmap 零拷贝)
+    public func records(from index: Int, limit: Int) -> [RecordInfo] {
+        var out: [RecordInfo] = []
+        guard limit > 0 else { return out }
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            var i = max(0, index)
+            let end = min(recordCount, i + limit)
+            out.reserveCapacity(end - i)
+            while i < end {
+                let rec = readRecord(raw, index: i)
+                out.append(RecordInfo(
+                    key: String(decoding: raw[rec.keyStart..<rec.keyStart + rec.keyLen], as: UTF8.self),
+                    word: String(decoding: raw[rec.wordStart..<rec.wordStart + rec.wordLen], as: UTF8.self),
+                    weight: rec.weight))
+                i += 1
+            }
+        }
+        return out
+    }
+
     // MARK: - 记录访问(在 withUnsafeBytes 内使用)
 
     private func readRecord(_ raw: UnsafeRawBufferPointer, index: Int) -> DictFormat.Record {
