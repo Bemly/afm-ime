@@ -58,10 +58,17 @@ final class CandidateDropletModel: ObservableObject {
     /// 网格态: 水滴贴合选中格(尺寸/定位不同于条态),几何按全量 frame 查找
     var gridMode = false
     /// 网格滚动位置(ScrollPosition 按偏移驱动,绕开 scrollTo 对 Grid 内容的空操作;
-    /// CLT 禁 @State,持久宿主放本模型)
-    var gridScrollPosition = ScrollPosition()
+    /// CLT 禁 @State,持久宿主放本模型)。
+    /// 【必须 @Published】scrollTo 只改这个属性本身,不发布变更 SwiftUI 永远不会重渲染应用它——
+    /// 指令会躺到下一次按键的无关重渲染时才被捎带执行(表现=跟随永远慢一拍,再按一下动两排)
+    @Published var gridScrollPosition = ScrollPosition()
     /// 网格当前滚动到的顶行(边缘跟随计算用;滚轮自由滚动时不追踪,选中移动时公式自校正)
     var gridTopRow = 0
+    /// 网格行距(格高 28 钉死 + Grid 垂直间距 1;滚动偏移与视口高度都按它闭合,单一来源在模型,
+    /// 补发滚动时 recompute 也要用)
+    let gridRowPitch: CGFloat = 29
+    /// 滚动跟随指令的有效期: 窗口内若发现选中格仍在视口外(指令被视图更新竞态吞掉),recompute 里补发
+    var gridFollowUntil = Date.distantPast
     /// 网格滚动视口 frame(candBar 坐标;滚动帧间竞态时水滴钳回视口防跳出候选框)
     var gridViewport: CGRect? = nil
 
@@ -87,11 +94,13 @@ final class CandidateDropletModel: ObservableObject {
     }
 
     func noteCellFrame(_ index: Int, _ frame: CGRect) {
-        frames[index] = frame
+        guard frames[index] != frame else { return } // 去重:onGeometryChange 重渲染时会重发相同值,
+        frames[index] = frame                        // 不设防会形成 上报→@Published→重渲染→再上报 死循环
         recompute()
     }
 
     func noteRowFrame(_ frame: CGRect) {
+        guard rowFrame != frame else { return }
         rowFrame = frame
     }
 
@@ -185,8 +194,12 @@ final class CandidateDropletModel: ObservableObject {
 
     /// 重算水滴几何(折射由 overlay 的 layerEffect 直接在幽灵层上做,模型只管几何)
     func recompute() {
-        guard !suppressed,
-              var cell = interpolatedFrame(at: dragFraction ?? Double(selectedIndex)) else {
+        // 网格态直取选中格 frame!interpolatedFrame 的 minX 排序是条态单行逻辑(单行里 minX 序=下标序),
+        // 二维网格下 keys.last 是「末列格」(99 候选时=下标 95,倒数第二行最后一列),
+        // f ≥ lastKey 的选中会全部错位吸到末列格——即「到不了最后一行/锁死在倒数第二行最后一列/水滴叠在别的候选上」
+        let target: CGRect? = gridMode ? frames[selectedIndex]
+                                       : interpolatedFrame(at: dragFraction ?? Double(selectedIndex))
+        guard !suppressed, var cell = target else {
             if blobFrame != nil {
                 DebugLog.log("水滴几何 → 隐藏 suppressed=\(suppressed) frac=\(dragFraction.map { String(format: "%.2f", $0) } ?? "nil")")
             }
@@ -195,14 +208,24 @@ final class CandidateDropletModel: ObservableObject {
             return
         }
         // 网格态: 滚动跟随存在帧间竞态(选中格新 frame 尚未随滚动重报,旧值可能在视口外),
-        // 把水滴钳回滚动视口,瞬态也不出候选框
+        // 把水滴钳回滚动视口,瞬态也不出候选框;
+        // 若在跟随有效期内仍出视口 = 滚动指令被视图更新竞态吞掉 → 立即补发(自愈闭环)
         if gridMode, let vp = gridViewport, vp.width > 0, cell.height > 0 {
-            cell.origin.y = min(max(cell.origin.y, vp.minY), vp.maxY - cell.height)
+            let clampedY = min(max(cell.origin.y, vp.minY), vp.maxY - cell.height)
+            if clampedY != cell.origin.y {
+                if Date() < gridFollowUntil {
+                    let y = CGFloat(gridTopRow) * gridRowPitch
+                    DebugLog.log("水滴钳回+补发滚动 y=\(Int(y)) (原 \(String(format: "%.1f", cell.origin.y)))")
+                    gridScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+                }
+                cell.origin.y = clampedY
+            }
         }
-        // 静止尺寸: 条=高 ≈0.875×玻璃条(Kyant0 水滴 56/条 64),宽 = cell + 6;网格=贴合选中格
-        let restH = gridMode ? min(cell.height + 2, barGlassHeight - 2)
+        // 静止尺寸: 条=高 ≈0.875×玻璃条(Kyant0 水滴 56/条 64),宽 = cell + 6;
+        // 网格=格四周再放一圈(字不贴框)
+        let restH = gridMode ? min(cell.height + 8, barGlassHeight - 2)
                              : min(barGlassHeight * 0.875, barGlassHeight - 2)
-        let restW = cell.width + 6
+        let restW = cell.width + 12
         let rest = CGRect(x: cell.midX - restW / 2, y: cell.midY - restH / 2, width: restW, height: restH)
         // 按压放大 1.35×(Kyant0 pressedScale 78/56)+ 速度挤压拉伸(layerBlock 同款公式)
         let pressScale = 1 + 0.35 * press
@@ -398,8 +421,9 @@ struct DropletOverlayView: View {
     /// 挂在 press 变化上:抓取瞬间 press 0→1 与位置跳变同事务 → 鼓起与「游到按压处候选」一并走此曲线;
     /// 拖拽跟手期 press 恒为 1 不触发 → 位置保持 1:1 直跟不脱手。
     private static let pressCurve = Animation.timingCurve(0.3, 0.2, 0.2, 1.4, duration: 0.32)
-    /// 非拖拽期的选中移动(←→/FM 重排): 水滴同款游动;拖拽中传 nil 保持直跟
+    /// 非拖拽期的选中移动(←→/FM 重排): 条态过冲游动;网格态短滑无过冲(过冲会冲出滚动视口)
     private static let slideCurve = Animation.timingCurve(0.3, 0.2, 0.2, 1.4, duration: 0.28)
+    private static let gridSlideCurve = Animation.easeOut(duration: 0.18)
 
     var body: some View {
         let _ = { // 交互期实际绘制值(渲染层真值);打字刷新期 body 高频重估,静默防刷屏
@@ -422,7 +446,9 @@ struct DropletOverlayView: View {
         .offset(x: marginH, y: marginV) // 宿主覆盖全面板,内容坐标为玻璃条内坐标
         .allowsHitTesting(false)
         .animation(Self.pressCurve, value: model.press)
-        .animation(model.dragFraction == nil ? Self.slideCurve : nil, value: model.blobFrame?.origin)
+        // 位置动画: 条态过冲游动;网格态短滑(拖拽跟手中为 nil 直跟)
+        .animation(model.dragFraction == nil ? (model.gridMode ? Self.gridSlideCurve : Self.slideCurve) : nil,
+                   value: model.blobFrame?.origin)
     }
 
     /// 玻璃水滴本体(26+ 系统玻璃/<26 白色半透明)+ 投影
@@ -451,13 +477,14 @@ struct DropletOverlayView: View {
     }
 
     /// 网格态幽灵字: 选中格内容以强调色重绘在水滴上层,frame 对齐原格(同条态幽灵行,无折射)。
-    /// 编号与格子一致用行内 1-8(全局序号键盘敲不出来,没意义)
+    /// 编号与格子一致用行内 1-8(全局序号键盘敲不出来,没意义);
+    /// 必须带 gridCell: true 用网格样式——条态样式(字大/边距宽)塞进网格框会整体错位出框
     @ViewBuilder private func gridGhostCell() -> some View {
         if let cf = model.cellFrame,
            let item = model.items.first(where: { $0.index == model.selectedIndex }) {
             CandidateCell(item: item,
                           number: item.isAI ? "\u{F8FF}" : "\(model.selectedIndex % 8 + 1)",
-                          active: true, ghost: true)
+                          active: true, ghost: true, gridCell: true)
                 .frame(width: cf.width, height: cf.height)
                 .offset(x: cf.minX, y: cf.minY)
                 .allowsHitTesting(false)
@@ -490,7 +517,7 @@ private struct CandidateGridView: View {
     var onCollapse: () -> Void
     private let cols = 8        // 8 列固定窗口(与 InputController.gridColumns 一致)
     private let visibleRows = 4 // 可见行数(与 InputController.gridVisibleRows 一致)
-    private let rowPitch: CGFloat = 29 // 行距 = 格高 28(gridCell 固定高,CJK 行高偏大必须钉死) + Grid 垂直间距 1
+    private var rowPitch: CGFloat { droplet.gridRowPitch } // 行距单一来源在模型(补发滚动也要用)
 
     var body: some View {
         let allRows = stride(from: 0, to: items.count, by: cols)
@@ -537,7 +564,7 @@ private struct CandidateGridView: View {
         .scrollIndicators(.visible)
         .frame(height: CGFloat(min(allRows.count, visibleRows)) * rowPitch - 1)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("candBar")) } action: { _, new in
-            droplet.gridViewport = new // 视口 frame(水滴越界瞬态钳回用)
+            if droplet.gridViewport != new { droplet.gridViewport = new } // 同上,去重防死循环
         }
         .onChange(of: selectedIndex) { _, tgt in
             scrollToSelectedRow(tgt)
