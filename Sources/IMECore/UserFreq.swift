@@ -29,6 +29,12 @@ public final class UserFreq {
         self.defaults = defaults
         self.counts = defaults.dictionary(forKey: Self.storeKey) as? [String: Int] ?? [:]
         self.pinyins = defaults.dictionary(forKey: Self.pinyinStoreKey) as? [String: String] ?? [:]
+        // 迁移: 清洗历史脏键(缩写键「的=d」/半截尾音节「好下=hao x」——教训是逐音节 ≥2 字母才收)
+        let bad = pinyins.filter { !Self.isValidPinyin($0.value) }.map(\.key)
+        if !bad.isEmpty {
+            for k in bad { pinyins.removeValue(forKey: k) }
+            defaults.set(pinyins, forKey: Self.pinyinStoreKey)
+        }
     }
 
     /// 候选被选用(空格/数字/点选/分段转换)时计数一次;pinyin 传该词命中的词典键(空格分隔音节),
@@ -100,16 +106,21 @@ public final class UserFreq {
         return out
     }
 
-    /// 打分乘数(词频层): 未打过 = ×1.0,打得越多越高,封顶 ×3
+    /// 打分乘数(词频层): 仅 ≥2 字词参与(了/的/是这类高频虚词不被个人词频顶掉),封顶 ×3
     public func boost(_ word: String) -> Double {
-        guard let c = counts[word], c > 0 else { return 1.0 }
+        guard word.count >= 2, let c = counts[word], c > 0 else { return 1.0 }
         return min(1 + 0.5 * log10(Double(c) + 1), 3.0)
     }
 
     public func count(_ word: String) -> Int { counts[word] ?? 0 }
 
+    /// 学习键合法性: 每个音节 ≥2 字母(a/o/e 这三个真单字母音节除外)。
+    /// 挡住两类脏键: 词典简拼派生键(提交「来」经 "l" 简拼候选,pinyin 字段是 "l" 而非 lai)与
+    /// 半截尾音节(「好下=hao x」)——它们会让「d」「hao x」这类输入永远被用户词霸占
     public static func isValidPinyin(_ p: String) -> Bool {
-        !p.isEmpty && p.count <= 24 && p.allSatisfy { ($0.isLowercase && $0.isASCII) || $0 == " " }
+        guard !p.isEmpty, p.count <= 24 else { return false }
+        let syls = p.split(separator: " ").map(String.init)
+        return !syls.isEmpty && syls.allSatisfy { $0.count >= 2 || $0 == "a" || $0 == "o" || $0 == "e" }
     }
 
     /// 超容量时淘汰次数最低的词条

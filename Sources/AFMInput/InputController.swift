@@ -82,6 +82,8 @@ final class InputController: IMKInputController {
     private var undoStack: [UndoEntry] = []
     /// 已转换段(尚未真正上屏,整句保持预编辑下划线态,最终上屏时一并写入)
     private var committedBuffer = ""
+    /// 已转换段的 (词, 拼音键) 轨迹: 最终上屏时整词组记入用户词库(真的+抽象 → 词组「真的抽象」)
+    private var committedKeys: [(word: String, pinyin: String)] = []
     /// 翻译面板等需抢键盘的面板打开期间组词挂起(状态保留,面板关闭后原样恢复,不上屏不丢弃)
     var compositionSuspended = false
 
@@ -267,6 +269,7 @@ final class InputController: IMKInputController {
             // 分段转换后: 回退最近一段(整句仍是预编辑态,纯内存操作,无需动应用文本)
             if let top = undoStack.last, raw == top.remainderRaw {
                 committedBuffer = String(committedBuffer.dropLast(top.segmentText.count))
+                committedKeys.removeLast() // 与撤销栈平行回退
                 undoStack.removeLast()
                 raw = top.previousRaw
                 aiBoostText = nil
@@ -279,6 +282,7 @@ final class InputController: IMKInputController {
             raw.removeLast()
             aiBoostText = nil
             undoStack.removeAll()
+            committedKeys.removeAll()
             DebugLog.log("退格 → raw='\(raw)'")
             refresh(client)
             return true
@@ -634,12 +638,23 @@ final class InputController: IMKInputController {
             DebugLog.log("分段转换 '\(cand.text)' → 余 '\(remainder)'")
             UserFreq.shared.record(cand.text, pinyin: learnPinyin)
             committedBuffer += cand.text
+            committedKeys.append((cand.text, learnPinyin)) // 词组轨迹(最终上屏整词组入学)
             undoStack.append(UndoEntry(segmentText: cand.text, previousRaw: raw, remainderRaw: remainder))
             raw = remainder
             aiBoostText = nil
             fmGeneration &+= 1
             refresh(client)
             return
+        }
+        // 词组学习: 分段组出的整词组以拼接拼音键记入用户词库(真的+抽象 → 真的抽象 = zhen de chou xiang,
+        // 之后 zhendchoux 逐音节宽松匹配直达)
+        if !committedKeys.isEmpty {
+            let phrase = committedBuffer + cand.text
+            let phraseKey = committedKeys.map(\.pinyin).joined(separator: " ") + " " + learnPinyin
+            if phrase != cand.text {
+                DebugLog.log("词组学习 '\(phrase)' = \(phraseKey)")
+                UserFreq.shared.record(phrase, pinyin: phraseKey)
+            }
         }
         UserFreq.shared.record(cand.text, pinyin: learnPinyin)
         flush(cand.text, client: client)
@@ -665,6 +680,7 @@ final class InputController: IMKInputController {
         fmGeneration &+= 1
         undoStack.removeAll()
         committedBuffer = ""
+        committedKeys.removeAll()
         compositionSuspended = false
         gridExpanded = false
         dropletModel.reset()
