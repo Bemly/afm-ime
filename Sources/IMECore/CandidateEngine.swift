@@ -19,12 +19,15 @@ public final class CandidateEngine {
         /// 排序先按此档再按分数——词典权重横跨 7 个数量级(ext 梗词 100 vs 高频单字 756 万),
         /// 乘法层级因子(0.1^层)压不住,没绷住(100)会被 没(756万×0.01=7.5万)压到十名开外
         public var coversInput: Bool
+        /// 用户词库命中(上屏过的词)——最高优先档,压过一切词典候选
+        public var isUser: Bool
 
-        public init(text: String, pinyin: String, score: Double, coversInput: Bool = true) {
+        public init(text: String, pinyin: String, score: Double, coversInput: Bool = true, isUser: Bool = false) {
             self.text = text
             self.pinyin = pinyin
             self.score = score
             self.coversInput = coversInput
+            self.isUser = isUser
         }
     }
 
@@ -32,6 +35,14 @@ public final class CandidateEngine {
         let t0 = Date()
         var best: [String: Candidate] = [:]
         var fuzzyVariants: [String] = []
+        var userHitCount = 0
+
+        // 用户词库: 上屏过的词按其拼音键直查(kb26)——最高优先档,「打得越多权重越高」
+        for uh in UserFreq.shared.hits(key: rawInput, partialPrefix: false) {
+            userHitCount += 1
+            best[uh.word] = Candidate(text: uh.word, pinyin: uh.pinyin,
+                                      score: UserFreq.shared.userScore(count: uh.count), isUser: true)
+        }
 
         // 简拼: 整串字母作为首字母缩写键直查(awsl→啊我死了/阿伟死了,n→你),与音节切分互补;
         // 缩写键由编译期派生(rime abbrev 等价),只取 key 恰好等于输入串的记录
@@ -44,10 +55,13 @@ public final class CandidateEngine {
 
         let segs = segmenter.segment(rawInput)
         var primaryFullExact = false // 主路径完整键在词库有整句短语 → 不做词格组句
-        // 去重: 同档比分数;全覆盖候选永远压过同词的部分覆盖条目
+        // 去重: 同档比分数;全覆盖候选永远压过同词的部分覆盖条目;
+        // 用户档同文不被词典候选覆盖(用户词永居最高档)
         func upsert(_ nc: Candidate) {
             if let old = best[nc.text] {
-                if old.coversInput == nc.coversInput {
+                if old.isUser != nc.isUser {
+                    if !nc.isUser { return }
+                } else if old.coversInput == nc.coversInput {
                     guard old.score < nc.score else { return }
                 } else if old.coversInput {
                     return
@@ -94,6 +108,7 @@ public final class CandidateEngine {
                 }
             }
             var foundExactMain = false
+            var segUserHits = 0
             for q in queries {
                 let fuzzy = q.factor < 1.0
                 for hit in store.query(prefix: q.key,
@@ -105,7 +120,26 @@ public final class CandidateEngine {
                     let score = Double(hit.weight) * (isExact ? 1.0 : 0.6) * keyFactor * q.factor
                     upsert(Candidate(text: hit.word, pinyin: hit.key, score: score))
                 }
+                // 用户词库: 与本键一致的已上屏词直查(缩写展开键放行=简拼混输能命中,模糊变体键不放行);
+                // partialPrefix 允许尾音节未打全(词条拼音以 key 为前缀)
+                if !fuzzyVariants.contains(q.key) {
+                    for uh in UserFreq.shared.hits(key: q.key, partialPrefix: seg.trailingPartial) {
+                        segUserHits += 1
+                        upsert(Candidate(text: uh.word, pinyin: uh.pinyin,
+                                         score: UserFreq.shared.userScore(count: uh.count), isUser: true))
+                    }
+                }
             }
+            // 宽松兜底: 快路径无命中时逐音节前缀匹配——中间音节没打全(mebengz 的 me⊂mei)与
+            // 缩写音节(zhedm 的 d⊂de、m⊂ma)都能命中用户词
+            if segUserHits == 0, seg.trailingPartial || seg.abbrevFlags.contains(true) {
+                for uh in UserFreq.shared.looseHits(key: key, limit: 5) {
+                    segUserHits += 1
+                    upsert(Candidate(text: uh.word, pinyin: uh.pinyin,
+                                     score: UserFreq.shared.userScore(count: uh.count), isUser: true))
+                }
+            }
+            userHitCount += segUserHits
             if si == 0, foundExactMain { primaryFullExact = true }
             // 渐进前缀(仅纯全拼路径;因子 0.1^层级,整句/全键词永远排在渐进单词前):
             // 长句打全拼但词库无对应短语时,给出覆盖开头音节的词(nishiyizhimaoniang → 你是一只猫娘(整句) > 你是)
@@ -137,11 +171,13 @@ public final class CandidateEngine {
         }
         var ranked = Array(best.values)
         for i in ranked.indices { ranked[i].score *= UserFreq.shared.boost(ranked[i].text) } // 用户词频: 档内选用越多越靠前
-        // 覆盖分档优先于分数: 全键候选(哪怕 ext 梗词权重 100)永远排在渐进前缀词(高频单字 756 万 × 0.01)之前
+        // 三档排序: 用户词库命中(最高,压过一切词典候选) > 全键覆盖 > 渐进前缀;档内按分数
+        func tier(_ c: Candidate) -> Int { c.isUser ? 2 : (c.coversInput ? 1 : 0) }
         let out = Array(ranked.sorted { a, b in
-            a.coversInput != b.coversInput ? a.coversInput : a.score > b.score
+            tier(a) != tier(b) ? tier(a) > tier(b) : a.score > b.score
         }.prefix(limit))
         DebugLog.log("引擎[\(rawInput)] 切分=\(segs.map { $0.syllables.joined(separator: "'") }.joined(separator: " / ")) → \(out.count) 条"
+            + (userHitCount > 0 ? " 用户词\(userHitCount)" : "")
             + (fuzzyVariants.isEmpty ? "" : " 模糊=\(fuzzyVariants.joined(separator: ","))")
             + ", \(String(format: "%.2f", -t0.timeIntervalSinceNow * 1000))ms")
         return out

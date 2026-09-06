@@ -627,10 +627,12 @@ final class InputController: IMKInputController {
         let cand = candidates[index]
         // 渐进前缀词(匹配键串是输入串的真前缀): 转换该段进缓冲,剩余拼音继续预测(整句保持预编辑态)
         let concat = cand.pinyin.replacingOccurrences(of: " ", with: "")
+        // 用户词频/用户词库: 选用即计数+记拼音;FM 整句等无拼音的候选用原始键入当键(FM 教的词下次原样输入可命中)
+        let learnPinyin = UserFreq.isValidPinyin(cand.pinyin) ? cand.pinyin : raw
         if !concat.isEmpty, raw.hasPrefix(concat), concat.count < raw.count {
             let remainder = String(raw.dropFirst(concat.count))
             DebugLog.log("分段转换 '\(cand.text)' → 余 '\(remainder)'")
-            UserFreq.shared.record(cand.text) // 用户词频: 选用即计数
+            UserFreq.shared.record(cand.text, pinyin: learnPinyin)
             committedBuffer += cand.text
             undoStack.append(UndoEntry(segmentText: cand.text, previousRaw: raw, remainderRaw: remainder))
             raw = remainder
@@ -639,7 +641,7 @@ final class InputController: IMKInputController {
             refresh(client)
             return
         }
-        UserFreq.shared.record(cand.text) // 用户词频: 选用即计数
+        UserFreq.shared.record(cand.text, pinyin: learnPinyin)
         flush(cand.text, client: client)
     }
 
