@@ -16,7 +16,7 @@ final class AppModel: ObservableObject {
     static let shared = AppModel()
 
     enum Tab: String, Identifiable, CaseIterable {
-        case install, dict, user, translate, settings
+        case install, dict, user, translate, model, settings
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
             case .dict: return "词库"
             case .user: return "用户词"
             case .translate: return "翻译"
+            case .model: return "模型"
             case .settings: return "设置"
             }
         }
@@ -33,6 +34,7 @@ final class AppModel: ObservableObject {
             case .dict: return "character.book.closed"
             case .user: return "person.text.rectangle"
             case .translate: return "translate"
+            case .model: return "cpu"
             case .settings: return "switch.2"
             }
         }
@@ -89,6 +91,58 @@ final class AppModel: ObservableObject {
     @Published var hotkeyHint = ""
     private var hotkeyMonitor: Any?
 
+    // 模型(kb36):云端模型(Provider 协议接入)+ 端侧 FM 提示词;键名 = IMECore.ModelPrefs 常量(单一来源)
+    static let cloudPresets: [(id: String, name: String, baseURL: String, format: String, model: String)] = [
+        ("openai", "OpenAI", "https://api.openai.com/v1", "openai", "gpt-4o-mini"),
+        ("anthropic", "Anthropic", "https://api.anthropic.com", "anthropic", "claude-sonnet-4-5"),
+        ("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "openai", "deepseek-chat"),
+        ("kimi", "Kimi(月之暗面)", "https://api.moonshot.cn/v1", "openai", "moonshot-v1-8k"),
+        ("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "openai", "glm-4-flash"),
+        ("qwen", "通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "openai", "qwen-plus"),
+        ("ark", "豆包(火山方舟)", "https://ark.cn-beijing.volces.com/api/v3", "openai", ""),
+        ("ollama", "Ollama(本机)", "http://127.0.0.1:11434/v1", "openai", ""),
+        ("custom", "自定义", "", "openai", ""),
+    ]
+    @Published var cloudEnabled: Bool { didSet { write(ModelPrefs.cloudEnabledKey, cloudEnabled) } }
+    @Published var cloudProvider: String { didSet { write(ModelPrefs.cloudProviderKey, cloudProvider); applyCloudPreset() } }
+    @Published var cloudBaseURL: String { didSet { write(ModelPrefs.cloudBaseURLKey, cloudBaseURL) } }
+    @Published var cloudAPIKey: String { didSet { write(ModelPrefs.cloudAPIKeyKey, cloudAPIKey) } }
+    @Published var cloudModel: String { didSet { write(ModelPrefs.cloudModelKey, cloudModel) } }
+    @Published var cloudFormat: String { didSet { write(ModelPrefs.cloudFormatKey, cloudFormat) } }
+    @Published var promptRerank: String { didSet { write(ModelPrefs.promptRerankKey, promptRerank) } }
+    @Published var promptSentence: String { didSet { write(ModelPrefs.promptSentenceKey, promptSentence) } }
+    @Published var promptTranslateEN: String { didSet { write(ModelPrefs.promptTranslateENKey, promptTranslateEN) } }
+    @Published var promptTranslateZH: String { didSet { write(ModelPrefs.promptTranslateZHKey, promptTranslateZH) } }
+    @Published var cloudTestResult = ""
+    @Published var cloudTesting = false
+
+    /// 选预设 → 自动填接口地址/格式/模型名(自定义不覆盖已填内容)
+    private func applyCloudPreset() {
+        guard let p = Self.cloudPresets.first(where: { $0.id == cloudProvider }), !p.baseURL.isEmpty else { return }
+        cloudBaseURL = p.baseURL
+        cloudFormat = p.format
+        if !p.model.isEmpty { cloudModel = p.model }
+    }
+
+    func testCloud() {
+        guard !cloudTesting else { return }
+        cloudTesting = true
+        cloudTestResult = ""
+        Task {
+            let out = await CloudProviderModel.probe(baseURL: cloudBaseURL, apiKey: cloudAPIKey,
+                                                     modelName: cloudModel, wireFormat: cloudFormat)
+            await MainActor.run {
+                cloudTesting = false
+                cloudTestResult = out
+            }
+        }
+    }
+
+    func resetPrompts() {
+        promptRerank = ""; promptSentence = ""; promptTranslateEN = ""; promptTranslateZH = ""
+        NSLog("[AFMApp] FM 提示词全部恢复默认")
+    }
+
     // 翻译(端侧 FM,与引擎进程共用 IMECore.FMReranker;方向自动:含中文→英,否则→中)
     @Published var translateInput = ""
     @Published var translateResult = ""
@@ -125,6 +179,16 @@ final class AppModel: ObservableObject {
         fmEnhance = d.object(forKey: "AFMFMEnhance") as? Bool ?? true
         userFreqEnabled = d.object(forKey: "AFMUserFreqEnabled") as? Bool ?? true
         fontSize = Double(d.object(forKey: "AFMCandidateFontSize") as? Int ?? 16)
+        cloudEnabled = d.object(forKey: ModelPrefs.cloudEnabledKey) as? Bool ?? false
+        cloudProvider = d.string(forKey: ModelPrefs.cloudProviderKey) ?? "openai"
+        cloudBaseURL = d.string(forKey: ModelPrefs.cloudBaseURLKey) ?? ""
+        cloudAPIKey = d.string(forKey: ModelPrefs.cloudAPIKeyKey) ?? ""
+        cloudModel = d.string(forKey: ModelPrefs.cloudModelKey) ?? ""
+        cloudFormat = d.string(forKey: ModelPrefs.cloudFormatKey) ?? "openai"
+        promptRerank = d.string(forKey: ModelPrefs.promptRerankKey) ?? ""
+        promptSentence = d.string(forKey: ModelPrefs.promptSentenceKey) ?? ""
+        promptTranslateEN = d.string(forKey: ModelPrefs.promptTranslateENKey) ?? ""
+        promptTranslateZH = d.string(forKey: ModelPrefs.promptTranslateZHKey) ?? ""
         loadStore()
         reloadUserRows()
         loadHotkeys()
@@ -137,6 +201,10 @@ final class AppModel: ObservableObject {
     private func write(_ key: String, _ value: Int) {
         Self.imeDefaults.set(value, forKey: key)
         NSLog("[AFMApp] 设置 \(key) = \(value)")
+    }
+    private func write(_ key: String, _ value: String) {
+        Self.imeDefaults.set(value, forKey: key)
+        NSLog("[AFMApp] 设置 \(key) = \(value.prefix(60))")
     }
 
     // MARK: 快捷键(kb35)
@@ -419,6 +487,7 @@ struct RootView: View {
                 case .dict: DictView(model: model)
                 case .user: UserWordsView(model: model)
                 case .translate: TranslateView(model: model)
+                case .model: ModelView(model: model)
                 case .settings: SettingsView(model: model)
                 }
             }
@@ -626,6 +695,69 @@ struct TranslateView: View {
             .padding(16)
         }
         .onSubmit { model.submitTranslate() }
+    }
+}
+
+// MARK: - 模型(kb36:云端模型 Provider 接入 + FM 提示词编辑)
+
+struct ModelView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                GlassCard(title: "云端模型(启用后替代端侧 FM,失败自动回落)") {
+                    Toggle("启用云端模型", isOn: $model.cloudEnabled)
+                    Picker("提供商", selection: $model.cloudProvider) {
+                        ForEach(AppModel.cloudPresets, id: \.id) { p in
+                            Text(p.name).tag(p.id)
+                        }
+                    }
+                    Picker("接口格式", selection: $model.cloudFormat) {
+                        Text("OpenAI 兼容(/chat/completions)").tag("openai")
+                        Text("Anthropic(/v1/messages)").tag("anthropic")
+                    }
+                    TextField("接口地址 Base URL(如 https://api.deepseek.com/v1)", text: $model.cloudBaseURL)
+                    SecureField("API Key", text: $model.cloudAPIKey)
+                    TextField("模型名(如 deepseek-chat)", text: $model.cloudModel)
+                    HStack(spacing: 10) {
+                        Button(model.cloudTesting ? "测试中…" : "测试连接") { model.testCloud() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.cloudTesting || model.cloudBaseURL.isEmpty || model.cloudModel.isEmpty)
+                        if model.cloudTesting { ProgressView().controlSize(.small) }
+                        Spacer()
+                    }
+                    if !model.cloudTestResult.isEmpty {
+                        Text(model.cloudTestResult)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                    }
+                    Text("请求结构沿用 fm 框架:提示词=系统消息(instructions),请求体=用户消息(prompt),由 FoundationModels Provider 协议的 Executor 转换。密钥明文存本机 IME 域;远程地址仅支持 https(本机 http 如 Ollama 可用);启用后组词上文与拼音会发送到所选服务商,注重隐私请勿启用。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                GlassCard(title: "提示词(留空 = 内置默认;云端启用时同样生效)") {
+                    promptEditor("候选重排(只输出序号数字)", $model.promptRerank)
+                    promptEditor("整句预测(只输出中文)", $model.promptSentence)
+                    promptEditor("翻译 · 中文→英(只输出译文)", $model.promptTranslateEN)
+                    promptEditor("翻译 · 外文→中(只输出译文)", $model.promptTranslateZH)
+                    Button("全部恢复默认") { model.resetPrompts() }
+                    Text("提示词改的是 instructions 段,请保留「只输出…」的格式约束,否则输出无法解析会自动回退词典。请求体(上文/拼音/候选的拼装)由代码固定;引擎与设置中心的翻译页共用这里的配置,改动即时生效。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private func promptEditor(_ title: String, _ text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline).foregroundStyle(.secondary)
+            TextEditor(text: text)
+                .font(.system(size: 12))
+                .frame(height: 64)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 10).fill(.primary.opacity(0.05)))
+        }
     }
 }
 
