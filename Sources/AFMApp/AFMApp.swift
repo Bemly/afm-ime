@@ -109,10 +109,13 @@ final class AppModel: ObservableObject {
     @Published var cloudAPIKey: String { didSet { write(ModelPrefs.cloudAPIKeyKey, cloudAPIKey) } }
     @Published var cloudModel: String { didSet { write(ModelPrefs.cloudModelKey, cloudModel) } }
     @Published var cloudFormat: String { didSet { write(ModelPrefs.cloudFormatKey, cloudFormat) } }
-    @Published var promptRerank: String { didSet { write(ModelPrefs.promptRerankKey, promptRerank) } }
-    @Published var promptSentence: String { didSet { write(ModelPrefs.promptSentenceKey, promptSentence) } }
-    @Published var promptTranslateEN: String { didSet { write(ModelPrefs.promptTranslateENKey, promptTranslateEN) } }
-    @Published var promptTranslateZH: String { didSet { write(ModelPrefs.promptTranslateZHKey, promptTranslateZH) } }
+    // 提示词 = 草稿-应用模式(kb36.1):编辑框预填当前生效值(覆盖 ?? 内置默认),编辑不落盘,
+    // 点「应用」才写入(与内置一致的草稿会清掉覆盖键,保证内置更新可跟随);引擎/helper 现读现判
+    @Published var promptRerank = ""
+    @Published var promptSentence = ""
+    @Published var promptTranslateEN = ""
+    @Published var promptTranslateZH = ""
+    @Published var promptAppliedHint = ""
     @Published var cloudTestResult = ""
     @Published var cloudTesting = false
 
@@ -138,8 +141,34 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// 应用提示词草稿:与内置默认一致的段落清掉覆盖键(跟随内置更新),其余写入
+    func applyPrompts() {
+        let d = Self.imeDefaults
+        let pairs: [(key: String, value: String, def: String)] = [
+            (ModelPrefs.promptRerankKey, promptRerank, FMReranker.defaultRerankInstructions),
+            (ModelPrefs.promptSentenceKey, promptSentence, FMReranker.defaultSentenceInstructions),
+            (ModelPrefs.promptTranslateENKey, promptTranslateEN, FMReranker.defaultTranslateENInstructions),
+            (ModelPrefs.promptTranslateZHKey, promptTranslateZH, FMReranker.defaultTranslateZHInstructions),
+        ]
+        for p in pairs {
+            let blank = p.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if blank || p.value == p.def {
+                d.removeObject(forKey: p.key)
+            } else {
+                d.set(p.value, forKey: p.key)
+            }
+            NSLog("[AFMApp] 提示词应用 \(p.key)(\(blank || p.value == p.def ? "默认" : "自定义"))")
+        }
+        promptAppliedHint = "已应用,输入法即时生效 ✓"
+    }
+
+    /// 全部恢复默认:草稿填回内置默认并立即应用
     func resetPrompts() {
-        promptRerank = ""; promptSentence = ""; promptTranslateEN = ""; promptTranslateZH = ""
+        promptRerank = FMReranker.defaultRerankInstructions
+        promptSentence = FMReranker.defaultSentenceInstructions
+        promptTranslateEN = FMReranker.defaultTranslateENInstructions
+        promptTranslateZH = FMReranker.defaultTranslateZHInstructions
+        applyPrompts()
         NSLog("[AFMApp] FM 提示词全部恢复默认")
     }
 
@@ -185,10 +214,10 @@ final class AppModel: ObservableObject {
         cloudAPIKey = d.string(forKey: ModelPrefs.cloudAPIKeyKey) ?? ""
         cloudModel = d.string(forKey: ModelPrefs.cloudModelKey) ?? ""
         cloudFormat = d.string(forKey: ModelPrefs.cloudFormatKey) ?? "openai"
-        promptRerank = d.string(forKey: ModelPrefs.promptRerankKey) ?? ""
-        promptSentence = d.string(forKey: ModelPrefs.promptSentenceKey) ?? ""
-        promptTranslateEN = d.string(forKey: ModelPrefs.promptTranslateENKey) ?? ""
-        promptTranslateZH = d.string(forKey: ModelPrefs.promptTranslateZHKey) ?? ""
+        promptRerank = (d.string(forKey: ModelPrefs.promptRerankKey) ?? "").isEmpty ? FMReranker.defaultRerankInstructions : d.string(forKey: ModelPrefs.promptRerankKey)!
+        promptSentence = (d.string(forKey: ModelPrefs.promptSentenceKey) ?? "").isEmpty ? FMReranker.defaultSentenceInstructions : d.string(forKey: ModelPrefs.promptSentenceKey)!
+        promptTranslateEN = (d.string(forKey: ModelPrefs.promptTranslateENKey) ?? "").isEmpty ? FMReranker.defaultTranslateENInstructions : d.string(forKey: ModelPrefs.promptTranslateENKey)!
+        promptTranslateZH = (d.string(forKey: ModelPrefs.promptTranslateZHKey) ?? "").isEmpty ? FMReranker.defaultTranslateZHInstructions : d.string(forKey: ModelPrefs.promptTranslateZHKey)!
         loadStore()
         reloadUserRows()
         loadHotkeys()
@@ -735,13 +764,21 @@ struct ModelView: View {
                     Text("请求结构沿用 fm 框架:提示词=系统消息(instructions),请求体=用户消息(prompt),由 FoundationModels Provider 协议的 Executor 转换。密钥明文存本机 IME 域;远程地址仅支持 https(本机 http 如 Ollama 可用);启用后组词上文与拼音会发送到所选服务商,注重隐私请勿启用。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                GlassCard(title: "提示词(留空 = 内置默认;云端启用时同样生效)") {
+                GlassCard(title: "提示词(内置默认已预填;编辑后点「应用」生效,云端启用时同样生效)") {
                     promptEditor("候选重排(只输出序号数字)", $model.promptRerank)
                     promptEditor("整句预测(只输出中文)", $model.promptSentence)
                     promptEditor("翻译 · 中文→英(只输出译文)", $model.promptTranslateEN)
                     promptEditor("翻译 · 外文→中(只输出译文)", $model.promptTranslateZH)
-                    Button("全部恢复默认") { model.resetPrompts() }
-                    Text("提示词改的是 instructions 段,请保留「只输出…」的格式约束,否则输出无法解析会自动回退词典。请求体(上文/拼音/候选的拼装)由代码固定;引擎与设置中心的翻译页共用这里的配置,改动即时生效。")
+                    HStack(spacing: 10) {
+                        Button("应用") { model.applyPrompts() }
+                            .buttonStyle(.borderedProminent)
+                        Button("全部恢复默认") { model.resetPrompts() }
+                        Spacer()
+                        if !model.promptAppliedHint.isEmpty {
+                            Text(model.promptAppliedHint).font(.caption).foregroundStyle(.green)
+                        }
+                    }
+                    Text("提示词改的是 instructions 段,请保留「只输出…」的格式约束,否则输出无法解析会自动回退词典;与内置默认一致的段落不落盘(跟随内置更新)。请求体(上文/拼音/候选的拼装)由代码固定;引擎与设置中心的翻译页共用这里的配置。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
