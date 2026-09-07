@@ -108,8 +108,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>AFM拼音</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
-	<key>CFBundleVersion</key><string>20260906</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.08</string>
+	<key>CFBundleVersion</key><string>20260908</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>LSBackgroundOnly</key><false/>
@@ -167,8 +167,8 @@ cat > "$HELPER/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleName</key><string>AFM拼音设置</string>
 	<key>CFBundleDisplayName</key><string>AFM拼音设置</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>2026.09.06</string>
-	<key>CFBundleVersion</key><string>20260906</string>
+	<key>CFBundleShortVersionString</key><string>2026.09.08</string>
+	<key>CFBundleVersion</key><string>20260908</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>NSHighResolutionCapable</key><true/>
