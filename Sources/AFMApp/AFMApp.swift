@@ -16,13 +16,14 @@ final class AppModel: ObservableObject {
     static let shared = AppModel()
 
     enum Tab: String, Identifiable, CaseIterable {
-        case install, dict, user, settings
+        case install, dict, user, translate, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .install: return "安装"
             case .dict: return "词库"
             case .user: return "用户词"
+            case .translate: return "翻译"
             case .settings: return "设置"
             }
         }
@@ -31,6 +32,7 @@ final class AppModel: ObservableObject {
             case .install: return "arrow.down.app"
             case .dict: return "character.book.closed"
             case .user: return "person.text.rectangle"
+            case .translate: return "translate"
             case .settings: return "switch.2"
             }
         }
@@ -68,6 +70,31 @@ final class AppModel: ObservableObject {
     @Published var fontSize: Double { didSet { write("AFMCandidateFontSize", Int(fontSize)) } }
     @Published var confirmUninstall = false
     @Published var confirmClear = false
+
+    // 翻译(端侧 FM,与引擎进程共用 IMECore.FMReranker;方向自动:含中文→英,否则→中)
+    @Published var translateInput = ""
+    @Published var translateResult = ""
+    @Published var translating = false
+
+    var translateDirection: String {
+        if translateInput.trimmingCharacters(in: .whitespaces).isEmpty { return "自动" }
+        let hasCJK = translateInput.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+        return hasCJK ? "中 → 英" : "英 → 中"
+    }
+
+    func submitTranslate() {
+        let text = translateInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !translating else { return }
+        translating = true
+        translateResult = ""
+        Task {
+            let out = await FMReranker.shared.translate(text)
+            await MainActor.run {
+                translating = false
+                translateResult = out ?? "翻译失败 — 端侧模型不可用或未输出结果"
+            }
+        }
+    }
 
     private static var imeDefaults: UserDefaults {
         UserDefaults(suiteName: imeDomain) ?? .standard
@@ -297,6 +324,7 @@ struct RootView: View {
                 case .install: InstallView(model: model)
                 case .dict: DictView(model: model)
                 case .user: UserWordsView(model: model)
+                case .translate: TranslateView(model: model)
                 case .settings: SettingsView(model: model)
                 }
             }
@@ -448,6 +476,62 @@ struct UserWordsView: View {
         .confirmationDialog("清空全部用户词与词频?", isPresented: $model.confirmClear, titleVisibility: .visible) {
             Button("清空", role: .destructive) { model.clearUsers() }
         }
+    }
+}
+
+// MARK: - 翻译(端侧 FM,中↔英方向自动)
+
+struct TranslateView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                GlassCard(title: "翻译 · \(model.translateDirection)") {
+                    TextEditor(text: $model.translateInput)
+                        .font(.system(size: 14))
+                        .frame(height: 110)
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(.primary.opacity(0.05)))
+                        .overlay(alignment: .bottomTrailing) {
+                            if !model.translateInput.isEmpty {
+                                Button {
+                                    model.translateInput = ""
+                                    model.translateResult = ""
+                                } label: { Image(systemName: "xmark.circle.fill") }
+                                    .buttonStyle(.plain).foregroundStyle(.tertiary)
+                                    .padding(6)
+                            }
+                        }
+                    HStack(spacing: 10) {
+                        Button(model.translating ? "翻译中…" : "翻译 ⏎") { model.submitTranslate() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.translating || model.translateInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                        if model.translating { ProgressView().controlSize(.small) }
+                        Spacer()
+                        if !model.translateResult.isEmpty {
+                            Button {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString(model.translateResult, forType: .string)
+                            } label: { Label("复制", systemImage: "doc.on.doc") }
+                        }
+                    }
+                    if !model.translateResult.isEmpty {
+                        Text(model.translateResult)
+                            .font(.system(size: 15))
+                            .textSelection(.enabled)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(.primary.opacity(0.05)))
+                    }
+                    Text("端侧 Apple 模型,隐私安全(不上云);方向自动识别;输入后按 ⏎ 翻译")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+        }
+        .onSubmit { model.submitTranslate() }
     }
 }
 

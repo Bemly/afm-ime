@@ -1,12 +1,11 @@
 import Foundation
 import FoundationModels
-import IMECore
 
 /// 端侧 FM 候选重排:根据上文语境把最合适的候选提到首位。
 /// 设计:每次新建 session(创建仅 ~1ms,无 transcript 增长,延迟稳定 ~0.3s);
 /// 失败/不可用一律静默返回 nil,绝不阻塞打字。
-final class FMReranker {
-    static let shared = FMReranker()
+public final class FMReranker {
+    public static let shared = FMReranker()
     private static let instructions = "你是中文输入法的候选排序引擎。根据上文语境和拼音,从候选列表中选出最符合语境的一个。只输出该候选的序号数字,禁止输出任何其他内容。"
     private static let sentenceInstructions = "你是中文拼音输入法的整句预测引擎。把用户输入的拼音串转成最通顺的中文。只输出中文结果,禁止解释、禁止重复拼音。"
 
@@ -16,7 +15,7 @@ final class FMReranker {
     }
 
     /// 返回 FM 选中的候选在入参 candidates 中的下标;不可用/失败/无法解析返回 nil
-    func rerank(context: String, pinyin: String, candidates: [String]) async -> Int? {
+    public func rerank(context: String, pinyin: String, candidates: [String]) async -> Int? {
         guard available, !candidates.isEmpty else {
             DebugLog.log("FM 不可用或无候选 available=\(available)")
             return nil
@@ -48,7 +47,7 @@ final class FMReranker {
     }
 
     /// FM 整句预测:长拼音词典覆盖不住时,直接让模型出句子
-    func predictSentence(context: String, pinyin: String) async -> String? {
+    public func predictSentence(context: String, pinyin: String) async -> String? {
         guard available, pinyin.count >= 4 else {
             DebugLog.log("FM 整句跳过: available=\(available) 长度=\(pinyin.count)")
             return nil
@@ -85,7 +84,7 @@ final class FMReranker {
     }
 
     /// FM 翻译(⌃F 面板): 含中文 → 译英,否则 → 译中;失败/不可用静默 nil
-    func translate(_ text: String) async -> String? {
+    public func translate(_ text: String) async -> String? {
         guard available, !text.isEmpty else {
             DebugLog.log("FM 翻译跳过: available=\(available)")
             return nil
