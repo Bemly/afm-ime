@@ -26,6 +26,17 @@ final class InputController: IMKInputController {
         set { UserDefaults.standard.set(newValue, forKey: "AFMEnglishMode") }
     }
 
+    // MARK: - 快捷键(设置中心 kb35 起可改:defaults 存 keyCode,IME 每次按键现读现判)
+
+    /// object 判 nil 区分「未设置」与合法键码 0(=字母 A);仅 ⌃+主键,修饰固定
+    private static func hotkey(_ name: String, _ fallback: Int) -> Int {
+        UserDefaults.standard.object(forKey: name) as? Int ?? fallback
+    }
+    /// 缺省: 剪贴板 ⌃V(9) / 内联翻译 ⌃F(3) / 设置中心 ⌃S(1);键名与设置中心 AFMApp 逐字一致
+    static var hotkeyClipboard: Int { hotkey("AFMHotkeyClipboard", 9) }
+    static var hotkeyTranslate: Int { hotkey("AFMHotkeyTranslate", 3) }
+    static var hotkeySettings: Int { hotkey("AFMHotkeySettings", 1) }
+
     static let liveControllers = NSHashTable<InputController>.weakObjects()
 
     // MARK: - 伴随面板(⌃V 剪贴板 / ⌃F 翻译)共享状态
@@ -218,8 +229,8 @@ final class InputController: IMKInputController {
             NSApp.orderFrontCharacterPalette(nil)
             return true
         }
-        // ⌃V 剪贴板面板(免激活,组词不打断;中英模式都拦)
-        if event.keyCode == 9, mods.contains(.control),
+        // ⌃V 剪贴板面板(免激活,组词不打断;中英模式都拦;键码设置中心可改)
+        if event.keyCode == Self.hotkeyClipboard, mods.contains(.control),
            !mods.contains(.option), !mods.contains(.command), !mods.contains(.shift) {
             Self.latestCaret = Self.caretRect(client)
             DebugLog.log("⌃V → 剪贴板面板")
@@ -227,16 +238,16 @@ final class InputController: IMKInputController {
             return true
         }
         // ⌃F 内联翻译: 组词中把当前高亮候选的译文直接显示在候选框(独立翻译框组件暂不启用);
-        // 非组词时放行给应用(终端 forward-char 等原生行为)
-        if event.keyCode == 3, mods.contains(.control),
+        // 非组词时放行给应用(终端 forward-char 等原生行为);键码设置中心可改
+        if event.keyCode == Self.hotkeyTranslate, mods.contains(.control),
            !mods.contains(.option), !mods.contains(.command), !mods.contains(.shift), !raw.isEmpty {
             Self.latestCaret = Self.caretRect(client)
             DebugLog.log("⌃F → 内联翻译候选")
             if translationMode { exitTranslationMode(client) } else { enterTranslationMode(client) }
             return true
         }
-        // ⌃S 打开设置中心(kb34:⌃F 保持内联翻译,设置迁到 ⌃S;中英模式都拦,终端 XOFF 取舍同 ⌃V/⌃F)
-        if event.keyCode == 1, mods.contains(.control),
+        // ⌃S 打开设置中心(kb34:⌃F 保持内联翻译,设置迁到 ⌃S;中英模式都拦,终端 XOFF 取舍同 ⌃V/⌃F;键码可改)
+        if event.keyCode == Self.hotkeySettings, mods.contains(.control),
            !mods.contains(.option), !mods.contains(.command), !mods.contains(.shift) {
             DebugLog.log("⌃S → 打开设置中心")
             openSettings(nil)

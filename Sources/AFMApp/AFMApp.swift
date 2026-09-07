@@ -71,6 +71,24 @@ final class AppModel: ObservableObject {
     @Published var confirmUninstall = false
     @Published var confirmClear = false
 
+    // 快捷键(kb35): IME handle 现读现判,defaults 只存 keyCode(+显示字符免查键码表);
+    // 修饰固定为 ⌃(IME 拦截层只拦 ⌃ 组合),录制时强制校验
+    struct HotkeyRow: Identifiable {
+        let id: String        // defaults 键(AFMHotkey…)
+        let title: String
+        let display: String   // 如 "⌃V"
+        let custom: Bool      // 是否已被用户改过
+    }
+    static let hotkeySlots: [(key: String, displayKey: String, fallback: Int, fallbackDisplay: String, title: String)] = [
+        ("AFMHotkeyClipboard", "AFMHotkeyClipboardDisplay", 9, "V", "剪贴板历史(⌃主键)"),
+        ("AFMHotkeyTranslate", "AFMHotkeyTranslateDisplay", 3, "F", "内联翻译(组词中,⌃主键)"),
+        ("AFMHotkeySettings", "AFMHotkeySettingsDisplay", 1, "S", "设置中心(⌃主键)"),
+    ]
+    @Published var hotkeyRows: [HotkeyRow] = []
+    @Published var recordingHotkey: String? = nil   // 正在录制的槽(nil=未在录)
+    @Published var hotkeyHint = ""
+    private var hotkeyMonitor: Any?
+
     // 翻译(端侧 FM,与引擎进程共用 IMECore.FMReranker;方向自动:含中文→英,否则→中)
     @Published var translateInput = ""
     @Published var translateResult = ""
@@ -109,6 +127,7 @@ final class AppModel: ObservableObject {
         fontSize = Double(d.object(forKey: "AFMCandidateFontSize") as? Int ?? 16)
         loadStore()
         reloadUserRows()
+        loadHotkeys()
     }
 
     private func write(_ key: String, _ value: Bool) {
@@ -118,6 +137,81 @@ final class AppModel: ObservableObject {
     private func write(_ key: String, _ value: Int) {
         Self.imeDefaults.set(value, forKey: key)
         NSLog("[AFMApp] 设置 \(key) = \(value)")
+    }
+
+    // MARK: 快捷键(kb35)
+
+    private func loadHotkeys() {
+        let d = Self.imeDefaults
+        hotkeyRows = Self.hotkeySlots.map { slot in
+            let custom = d.object(forKey: slot.key) != nil
+            let disp = d.string(forKey: slot.displayKey) ?? slot.fallbackDisplay
+            return HotkeyRow(id: slot.key, title: slot.title, display: "⌃\(disp)", custom: custom)
+        }
+    }
+
+    private func effectiveCode(_ slot: (key: String, displayKey: String, fallback: Int, fallbackDisplay: String, title: String)) -> Int {
+        Self.imeDefaults.object(forKey: slot.key) as? Int ?? slot.fallback
+    }
+
+    func startRecording(_ id: String) {
+        stopRecording()
+        recordingHotkey = id
+        hotkeyHint = "按下新的快捷键(⌃ + 字母/数字/符号)… Esc 取消"
+        hotkeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
+            guard let self, self.recordingHotkey != nil else { return ev }
+            self.handleRecordEvent(ev)
+            return nil // 录制期间吞掉按键
+        }
+    }
+
+    func stopRecording() {
+        if let m = hotkeyMonitor { NSEvent.removeMonitor(m); hotkeyMonitor = nil }
+        recordingHotkey = nil
+        hotkeyHint = ""
+    }
+
+    func resetHotkeys() {
+        for slot in Self.hotkeySlots {
+            Self.imeDefaults.removeObject(forKey: slot.key)
+            Self.imeDefaults.removeObject(forKey: slot.displayKey)
+        }
+        NSLog("[AFMApp] 快捷键全部恢复默认")
+        loadHotkeys()
+        stopRecording()
+    }
+
+    private func handleRecordEvent(_ ev: NSEvent) {
+        if ev.keyCode == 53 { stopRecording(); return } // Esc 取消
+        let mods = ev.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard mods.contains(.control), !mods.contains(.option), !mods.contains(.command), !mods.contains(.shift),
+              let display = displayChar(for: ev) else {
+            hotkeyHint = "需要 ⌃ + 单个字母/数字/符号(Option/Command/Shift 组合与功能键不支持),Esc 取消"
+            return
+        }
+        guard let slot = Self.hotkeySlots.first(where: { $0.key == recordingHotkey }) else {
+            stopRecording(); return
+        }
+        if let dup = Self.hotkeySlots.first(where: { $0.key != slot.key && effectiveCode($0) == Int(ev.keyCode) }) {
+            hotkeyHint = "与「\(dup.title)」冲突,换一个键"
+            return
+        }
+        Self.imeDefaults.set(Int(ev.keyCode), forKey: slot.key)
+        Self.imeDefaults.set(display, forKey: slot.displayKey)
+        NSLog("[AFMApp] 快捷键 \(slot.key) = ⌃\(display) (keyCode \(ev.keyCode))")
+        loadHotkeys()
+        stopRecording()
+    }
+
+    /// 录制显示字符: 字母大写、数字/可打印符号原样;功能键/方向键等显示不出的不支持
+    private func displayChar(for ev: NSEvent) -> String? {
+        guard let chars = ev.charactersIgnoringModifiers, !chars.isEmpty,
+              let scalar = chars.unicodeScalars.first else { return nil }
+        let v = scalar.value
+        if (97...122).contains(v) { return String(scalar).uppercased() } // a-z
+        if (48...57).contains(v) || (32...47).contains(v) || (58...64).contains(v)
+            || (91...96).contains(v) || (123...126).contains(v) { return chars } // 数字与可打印符号
+        return nil
     }
 
     // MARK: 词库
@@ -561,13 +655,42 @@ struct SettingsView: View {
                     Text("仅候选条生效;展开网格的行距按 28pt 几何闭合,字号固定。改动打字时即可看到。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                GlassCard(title: "快捷键") {
+                    ForEach(model.hotkeyRows) { row in
+                        HStack(spacing: 10) {
+                            Text(row.title).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(row.display)
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .padding(.horizontal, 10).padding(.vertical, 3)
+                                .background(Capsule().fill(.primary.opacity(0.08)))
+                            if row.custom {
+                                Text("已自定义").font(.caption2).foregroundStyle(.secondary)
+                            }
+                            if model.recordingHotkey == row.id {
+                                Button("取消") { model.stopRecording() }
+                            } else {
+                                Button("修改") { model.startRecording(row.id) }
+                            }
+                        }
+                    }
+                    if !model.hotkeyHint.isEmpty {
+                        Text(model.hotkeyHint).font(.caption).foregroundStyle(.orange)
+                    }
+                    HStack {
+                        Button("全部恢复默认") { model.resetHotkeys() }
+                        Spacer()
+                    }
+                    Text("修饰键固定为 ⌃,主键支持字母/数字/符号;输入法现读现判,改动即时生效。终端里对应组合键会被输入法接管(⌃S 为 XOFF 流控等,已知取舍)。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 GlassCard(title: "说明") {
-                    Text("中英模式:轻点 Shift 随时切换(全部应用生效,跨重启记忆),故不在此重复提供开关。")
+                    Text("中英模式:轻点 Shift 随时切换(全部应用生效,跨重启记忆),故不在此重复提供开关。组词中按住 Shift 敲字母可输入大写英文(如 GDP),随候选一并上屏。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(16)
         }
+        .onDisappear { model.stopRecording() } // 离开设置页:取消录制监控,防止残留吞键
     }
 }
 
