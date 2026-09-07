@@ -23,7 +23,7 @@ if cliArgs.count > 1 {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var server: IMKServer?
     /// 构建标记:日志里区分新旧进程(重装后防 launchd 复活旧二进制)
-    static let buildTag = "20260906-kb33"
+    static let buildTag = "20260908-kb34"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 幽灵副本自愈(必须先于 IMKServer 初始化——副本若用同一连接名起完整引擎,会劫持客户端

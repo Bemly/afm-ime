@@ -216,6 +216,13 @@ final class InputController: IMKInputController {
             if translationMode { exitTranslationMode(client) } else { enterTranslationMode(client) }
             return true
         }
+        // ⌃S 打开设置中心(kb34:⌃F 保持内联翻译,设置迁到 ⌃S;中英模式都拦,终端 XOFF 取舍同 ⌃V/⌃F)
+        if event.keyCode == 1, mods.contains(.control),
+           !mods.contains(.option), !mods.contains(.command), !mods.contains(.shift) {
+            DebugLog.log("⌃S → 打开设置中心")
+            openSettings(nil)
+            return true
+        }
         // 剪贴板面板键控(免激活模式客户端仍持焦点,键盘在此路由;组词中按键仍归组词,面板用点击)
         if CompanionPanels.clipboard.isVisible, raw.isEmpty,
            CompanionPanels.clipboard.routeKey(event) {
