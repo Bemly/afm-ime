@@ -92,6 +92,25 @@ final class InputController: IMKInputController {
     static let dropletModel = CandidateDropletModel.shared
     private var dropletModel: CandidateDropletModel { Self.dropletModel }
 
+    // MARK: - 英文字尾冻结(kb35: 组词中 shift+字母 → 大写;首个大写字母起整段为字面英文,不参与拼音)
+    // 例: "niHao" = 拼音段 "ni" + 字尾 "Hao" → 候选按 "ni" 查,空格上屏 "你Hao";纯 "GDP" 无候选,空格直接上屏原文
+
+    /// 拼音段: 首个大写字母之前的部分(全小写),供词典查询/FM/用户词学习
+    private var pinyinPart: String {
+        guard let i = raw.firstIndex(where: { $0.isUppercase }) else { return raw }
+        return String(raw[..<i])
+    }
+    /// 字面英文字尾: 首个大写字母起(含)的整段,提交时原样拼在候选/译文后
+    private var literalTail: String {
+        guard let i = raw.firstIndex(where: { $0.isUppercase }) else { return "" }
+        return String(raw[i...])
+    }
+    /// 组词中"先上屏首选"场合(标点/失焦/面板插入)的统一文本: 首选+字尾;无候选时上屏 raw 原文
+    private var firstChoiceText: String {
+        if let first = candidates.first { return first.text + literalTail }
+        return raw
+    }
+
     override init(server: IMKServer!, delegate: Any!, client: Any!) {
         super.init(server: server, delegate: delegate, client: client)
         Self.liveControllers.add(self)
@@ -252,18 +271,23 @@ final class InputController: IMKInputController {
         }
 
         switch true {
-        case ("a"..."z").contains(key): // 字母入缓冲
-            raw.append(key)
+        case ("a"..."z").contains(key): // 字母入缓冲;按住 Shift → 大写字母,进入英文字尾冻结段(kb35,ShiftTap 的 shiftUsed 机制保证不误触中英切换)
+            if mods.contains(.shift) {
+                DebugLog.log("shift+字母 → 大写 '\(key.uppercased())' 入英文字尾")
+                raw.append(Character(key.uppercased()))
+            } else {
+                raw.append(key)
+            }
             refresh(client)
             return true
 
         case eff == "'" where composing: // 组词中 ' 仅作打字辅助分隔符,不入缓冲(保证渐进前缀的字母偏移计算)
             return true
 
-        case event.keyCode == 49 where translationMode: // 空格 → 上屏译文
+        case event.keyCode == 49 where translationMode: // 空格 → 上屏译文(+未提交的英文字尾)
             if !translating, let t = translatedText {
                 DebugLog.log("空格 → 上屏译文 '\(t)'")
-                flush(t, client: client)
+                flush(t + literalTail, client: client)
             }
             return true
 
@@ -389,7 +413,7 @@ final class InputController: IMKInputController {
         guard UserPrefs.fullWidthPunct else {
             if composing {
                 DebugLog.log("全角标点关 → 先上屏首选,原样放行 '\(chars)'")
-                flush(candidates.first?.text ?? raw, client: client)
+                flush(firstChoiceText, client: client)
             } else {
                 DebugLog.log("全角标点关 → 放行 '\(chars)'")
             }
@@ -404,7 +428,7 @@ final class InputController: IMKInputController {
         guard let fw = mapped else {
             if composing { // 未映射标点: 先上屏首选,原标点放行
                 DebugLog.log("标点 '\(chars)' → 先上屏首选再放行")
-                flush(candidates.first?.text ?? raw, client: client)
+                flush(firstChoiceText, client: client)
             } else {
                 DebugLog.log("无组词,放行 '\(chars)'")
             }
@@ -435,7 +459,7 @@ final class InputController: IMKInputController {
     override func commitComposition(_ sender: Any!) {
         DebugLog.log("commitComposition raw='\(raw)' 首选=\(candidates.first?.text ?? "无")")
         guard !raw.isEmpty else { return }
-        flush(candidates.first?.text ?? raw, client: sender)
+        flush(firstChoiceText, client: sender)
     }
 
     // MARK: - 内部
@@ -481,11 +505,12 @@ final class InputController: IMKInputController {
             DebugLog.error("refresh: client 不符合 IMKTextInput")
             return
         }
-        candidates = raw.isEmpty ? [] : (Self.engine?.candidates(for: raw, limit: Self.maxCandidates) ?? [])
+        let py = pinyinPart // 字尾冻结段不进切分器(大写字母不是合法音节,整串查询会拖累渐进兜底)
+        candidates = py.isEmpty ? [] : (Self.engine?.candidates(for: py, limit: Self.maxCandidates) ?? [])
         selectedIndex = 0
         dropletModel.reset() // 组词刷新,水滴归位
         exitTranslationState() // 组词已变化,翻译态作废(窗口由本次 refresh 统一刷新)
-        DebugLog.log("refresh '\(raw)' → 候选 \(candidates.count) 条: "
+        DebugLog.log("refresh '\(raw)' 拼音段='\(py)' → 候选 \(candidates.count) 条: "
             + candidates.prefix(5).map { "\($0.text)(\(Int($0.score)))" }.joined(separator: " "))
 
         let full = committedBuffer + raw // 已转换段 + 剩余拼音,整句保持预编辑下划线态
@@ -499,9 +524,9 @@ final class InputController: IMKInputController {
                                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
 
         if candidates.isEmpty {
-            if raw.count >= 4, UserPrefs.fmEnhance {
+            if pinyinPart.count >= 4, UserPrefs.fmEnhance {
                 // 无词典候选但 FM 可能出整句:光标处占位等待,不取消推理
-                DebugLog.log("无词典候选(长 \(raw.count))→ 占位等待 FM 整句")
+                DebugLog.log("无词典候选(拼音段长 \(pinyinPart.count))→ 占位等待 FM 整句")
                 updateCandidateWindow(client, loading: true)
                 scheduleFMRerank(client)
             } else {
@@ -564,8 +589,8 @@ final class InputController: IMKInputController {
             return
         }
         if !c.raw.isEmpty {
-            DebugLog.log("面板插入前先上屏首选 '\(c.candidates.first?.text ?? c.raw)'")
-            c.flush(c.candidates.first?.text ?? c.raw, client: client)
+            DebugLog.log("面板插入前先上屏首选 '\(c.firstChoiceText)'")
+            c.flush(c.firstChoiceText, client: client)
         }
         guard let textInput = client as? IMKTextInput else {
             DebugLog.error("insertFromPanel: client 不符合 IMKTextInput")
@@ -671,10 +696,26 @@ final class InputController: IMKInputController {
             return
         }
         let cand = candidates[index]
+        // 英文字尾冻结: 候选只对应拼音段 → 词+字尾一次上屏,不走分段转换(字尾非拼音,分段无意义)
+        if !literalTail.isEmpty {
+            let tailPinyin = UserFreq.isValidPinyin(cand.pinyin) ? cand.pinyin : pinyinPart
+            if !committedKeys.isEmpty { // 前序分段 + 本次词 + 字尾: 词组学习照常
+                let phrase = committedBuffer + cand.text
+                let phraseKey = committedKeys.map(\.pinyin).joined(separator: " ") + " " + tailPinyin
+                if phrase != cand.text {
+                    DebugLog.log("词组学习 '\(phrase)' = \(phraseKey)")
+                    UserFreq.shared.record(phrase, pinyin: phraseKey)
+                }
+            }
+            UserFreq.shared.record(cand.text, pinyin: tailPinyin)
+            DebugLog.log("上屏 '\(cand.text)' + 英文字尾 '\(literalTail)'")
+            flush(cand.text + literalTail, client: client)
+            return
+        }
         // 渐进前缀词(匹配键串是输入串的真前缀): 转换该段进缓冲,剩余拼音继续预测(整句保持预编辑态)
         let concat = cand.pinyin.replacingOccurrences(of: " ", with: "")
-        // 用户词频/用户词库: 选用即计数+记拼音;FM 整句等无拼音的候选用原始键入当键(FM 教的词下次原样输入可命中)
-        let learnPinyin = UserFreq.isValidPinyin(cand.pinyin) ? cand.pinyin : raw
+        // 用户词频/用户词库: 选用即计数+记拼音;FM 整句等无拼音的候选拼音段当键(下次原样输入可复现)
+        let learnPinyin = UserFreq.isValidPinyin(cand.pinyin) ? cand.pinyin : pinyinPart
         if !concat.isEmpty, raw.hasPrefix(concat), concat.count < raw.count {
             let remainder = String(raw.dropFirst(concat.count))
             DebugLog.log("分段转换 '\(cand.text)' → 余 '\(remainder)'")
@@ -744,17 +785,18 @@ final class InputController: IMKInputController {
         }
         fmGeneration &+= 1
         let gen = fmGeneration
-        let snapshotRaw = raw
+        let snapshotRaw = raw              // 过期判定用(含英文字尾)
+        let snapshotPinyin = pinyinPart    // 发给模型的拼音(不含字尾,模型只认音节串)
         let context = Self.contextBeforeCaret(client)
         let texts = candidates.prefix(Self.perPage).map(\.text)
 
         // 整句判定: 无候选,或输入较长(≥8 字母)——引擎组句是即时草稿,长输入始终触发 FM 纠正
-        let needSentence = (texts.isEmpty && raw.count >= 4) || raw.count >= 8
+        let needSentence = (texts.isEmpty && snapshotPinyin.count >= 4) || snapshotPinyin.count >= 8
         if texts.count <= 1 && !needSentence {
             DebugLog.log("FM 跳过: 候选不足")
             return
         }
-        DebugLog.log("FM 排队 gen=\(gen) 模式=\(needSentence ? "整句" : "重排") 上文='\(context)' 拼音='\(snapshotRaw)' 候选=\(texts)")
+        DebugLog.log("FM 排队 gen=\(gen) 模式=\(needSentence ? "整句" : "重排") 上文='\(context)' 拼音='\(snapshotPinyin)' 候选=\(texts)")
 
         Task { [weak self] in
             // 整句预测立即触发(词典覆盖不足正是需要整句的时机);候选重排保持 400ms 防抖
@@ -766,7 +808,7 @@ final class InputController: IMKInputController {
                 return
             }
             if needSentence {
-                guard let sentence = await FMReranker.shared.predictSentence(context: context, pinyin: snapshotRaw) else {
+                guard let sentence = await FMReranker.shared.predictSentence(context: context, pinyin: snapshotPinyin) else {
                     DebugLog.log("FM 整句无结果 gen=\(gen)")
                     await MainActor.run {
                         // 占位中的窗口:整句失败且仍无词典候选 → 收起占位
@@ -786,7 +828,7 @@ final class InputController: IMKInputController {
                     self.applyAISentence(sentence)
                 }
             } else {
-                guard let best = await FMReranker.shared.rerank(context: context, pinyin: snapshotRaw, candidates: texts) else {
+                guard let best = await FMReranker.shared.rerank(context: context, pinyin: snapshotPinyin, candidates: texts) else {
                     DebugLog.log("FM 无结果 gen=\(gen)")
                     return
                 }
