@@ -871,7 +871,7 @@ struct AFMControlCenter: App {
         WindowGroup("AFM拼音") {
             RootView(model: AppModel.shared)
                 .onAppear {
-                    if let url = Bundle.main.url(forResource: "appicon", withExtension: "tiff"),
+                    if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
                        let img = NSImage(contentsOf: url) {
                         NSApp.applicationIconImage = img
                     }
