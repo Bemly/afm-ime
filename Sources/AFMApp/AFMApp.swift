@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import IMECore
 
 // AFM拼音.app(GUI 控制中心): 安装器 + 词库浏览 + 用户词权重 + 设置,液态玻璃风格。
@@ -65,6 +66,7 @@ final class AppModel: ObservableObject {
         let boost: Double
     }
     @Published var userRows: [UserRow] = []
+    @Published var userMessage = ""   // 导入结果等一次性提示
 
     // 设置(键名 = UserPrefs)
     @Published var fuzzy: Bool { didSet { write("AFMFuzzyPinyin", fuzzy) } }
@@ -384,14 +386,66 @@ final class AppModel: ObservableObject {
         pins.removeValue(forKey: word)
         Self.imeDefaults.set(counts, forKey: "AFMUserFreq")
         Self.imeDefaults.set(pins, forKey: "AFMUserPinyin")
+        UserFreq.tombstone(words: [word], defaults: Self.imeDefaults) // 删过的不随内置种子版本升级复活
         NSLog("[AFMApp] 删除用户词 '\(word)'")
+        UserFreq.postExternalChange() // 引擎内存副本持有旧表,不广播会被下次防抖保存复活
         reloadUserRows()
     }
 
     func clearUsers() {
+        let counts = Self.imeDefaults.dictionary(forKey: "AFMUserFreq") as? [String: Int] ?? [:]
+        UserFreq.tombstone(words: Array(counts.keys), defaults: Self.imeDefaults) // 清空前全部记墓碑
         Self.imeDefaults.removeObject(forKey: "AFMUserFreq")
         Self.imeDefaults.removeObject(forKey: "AFMUserPinyin")
-        NSLog("[AFMApp] 清空用户词库")
+        NSLog("[AFMApp] 清空用户词库(墓碑 \(counts.count) 条)")
+        UserFreq.postExternalChange()
+        reloadUserRows()
+    }
+
+    /// 导入用户词:JSON 文件(与内置 builtin-user-words.json 同格式,见 Data/builtin-user-words.json
+    /// 头部 note),合并进 IME 域——已有词取次数较大者、拼音仅缺省才补(本机数据优先,同文不降档),
+    /// 导入的词解除墓碑(显式带回=用户改主意),写完广播引擎重读(kb40)
+    func importUsers() {
+        let panel = NSOpenPanel()
+        panel.title = "导入用户词"
+        panel.message = "JSON 文件,格式同内置用户词种子:{\"version\":1,\"words\":[{\"word\":\"词\",\"pinyin\":\"pin yin\",\"count\":3}]}"
+        panel.allowedContentTypes = [.json]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let data = try? Data(contentsOf: url),
+              let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = doc["words"] as? [[String: Any]] else {
+            userMessage = "导入失败:不是有效的用户词 JSON(缺 words 数组或格式不对)"
+            return
+        }
+        var counts = Self.imeDefaults.dictionary(forKey: "AFMUserFreq") as? [String: Int] ?? [:]
+        var pins = Self.imeDefaults.dictionary(forKey: "AFMUserPinyin") as? [String: String] ?? [:]
+        var added = 0, updated = 0, skipped = 0
+        var importedWords: [String] = []
+        for item in items {
+            guard let word = item["word"] as? String, !word.isEmpty, word.count <= 50,
+                  let count = item["count"] as? Int, count > 0 else {
+                skipped += 1
+                continue
+            }
+            importedWords.append(word)
+            if let existing = counts[word] {
+                if count > existing { counts[word] = count; updated += 1 }
+            } else {
+                counts[word] = count
+                added += 1
+            }
+            if let p = item["pinyin"] as? String, UserFreq.isValidPinyin(p), pins[word] == nil {
+                pins[word] = p
+            }
+        }
+        Self.imeDefaults.set(counts, forKey: "AFMUserFreq")
+        Self.imeDefaults.set(pins, forKey: "AFMUserPinyin")
+        UserFreq.untombstone(words: importedWords, defaults: Self.imeDefaults)
+        UserFreq.postExternalChange()
+        NSLog("[AFMApp] 导入用户词: 新增 \(added) 更新 \(updated) 跳过 \(skipped)(源 \(url.lastPathComponent))")
+        userMessage = "导入完成:新增 \(added) 条、更新 \(updated) 条\(skipped > 0 ? "、跳过非法 \(skipped) 条" : "")(共 \(counts.count) 条)"
         reloadUserRows()
     }
 
@@ -671,9 +725,16 @@ struct UserWordsView: View {
             .padding(.horizontal, 10)
             Text("右键条目可删除 · 上屏自动学习(词组学习:分段组句整词组入词库)")
                 .font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, 16)
+            if !model.userMessage.isEmpty {
+                Text(model.userMessage)
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+            }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Button { model.importUsers() } label: { Label("导入用户词…", systemImage: "square.and.arrow.down") }
+            }
+            ToolbarItem {
                 Button { model.confirmClear = true } label: { Label("清空全部", systemImage: "trash") }
                     .disabled(model.userRows.isEmpty)
             }

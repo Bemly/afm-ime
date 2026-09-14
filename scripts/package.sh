@@ -96,6 +96,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINDIR/afm-input" "$APP/Contents/MacOS/AFMInput"
 cp Data/dict.bin "$APP/Contents/Resources/dict.bin"
+cp Data/builtin-user-words.json "$APP/Contents/Resources/builtin-user-words.json"  # 内置用户词种子(UserFreq 首启补种,kb40)
 [ -n "$METALLIB" ] && cp "$METALLIB" "$APP/Contents/Resources/default.metallib"
 [ -n "$TISICON" ] && cp "$TISICON" "$APP/Contents/Resources/icon.tiff"
 [ -n "$ICON" ] && cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
@@ -169,6 +170,7 @@ PLIST
 HELPER="$APP/Contents/PlugIns/AFMSettings.app"
 mkdir -p "$HELPER/Contents/MacOS" "$HELPER/Contents/Resources"
 cp "$BINDIR/afm-app" "$HELPER/Contents/MacOS/AFMSettings"
+cp Data/builtin-user-words.json "$HELPER/Contents/Resources/builtin-user-words.json"  # helper 先启动时也能完成补种
 [ -n "$ICON" ] && cp "$ICON" "$HELPER/Contents/Resources/AppIcon.icns"
 cat > "$HELPER/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

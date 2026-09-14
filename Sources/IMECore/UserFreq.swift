@@ -6,7 +6,14 @@ import Foundation
 ///   最高优先档——「打得越多权重越高」的主实现:用过的词立即置顶,次数只在用户词内部决定
 ///   相对次序(userScore 随次数单调增长)。
 /// 存储:UserDefaults 两个字典(word→count / word→拼音键),容量 5000 按次数淘汰,保存防抖 2s。
-/// 主线程访问(engine 查询与 InputController 上屏都在主线程)。
+/// 内置词种子(kb40):bundle Resources 的 builtin-user-words.json 按其 version 门控在首次运行时
+/// 合入本地库(只补缺失词,已有词取较大次数、拼音仅缺省才补),文件更新 version 后自动补种;
+/// 删除过的词经墓碑表(AFMUserWordsDeleted)挡住,不随版本升级复活。
+/// 跨进程:设置中心进程会直接改写 defaults(导入/删除/清空),经 Darwin 通知广播(CFNotificationCenter,
+/// libnotify 的 notify_* 在 Swift 无模块可 import),本类收到后丢弃防抖窗口内的未落盘改动并重读——
+/// 外部改动优先于内存副本(防删掉的词被引擎下次保存复活)。
+/// 主线程访问(engine 查询与 InputController 上屏都在主线程;Darwin 中心回调走注册线程的 run loop,
+/// 注册发生在主线程 init)。
 public final class UserFreq {
     public static let shared = UserFreq()
 
@@ -14,18 +21,26 @@ public final class UserFreq {
     private static let pinyinStoreKey = "AFMUserPinyin"
     private static let maxEntries = 5000
     private static let maxWordLen = 50     // 整句/长文本(FM 整句、剪贴板)不进词频
+    private static let seededVersionKey = "AFMBuiltinUserWordsSeeded"
+    private static let deletedSeedsKey = "AFMUserWordsDeleted"
+
+    /// 设置中心 → 引擎 的跨进程变更广播名(Darwin 通知)
+    public static let externalChangeNotify = "moe.bemly.inputmethod.AfmIME.userdict.changed"
 
     private let defaults: UserDefaults
     private var counts: [String: Int]
     private var pinyins: [String: String]
     private var saveScheduled = false
+    private var observing = false
 
     // 派生索引(懒重建): 拼音有序表(前缀二分,缓存音节数组供宽松匹配) + 简拼索引
     private var sortedPins: [(pinyin: String, syls: [String], word: String, count: Int)] = []
     private var initialsIndex: [String: [(word: String, count: Int, pinyin: String)]] = [:]
     private var indexDirty = true
 
-    public init(defaults: UserDefaults = .standard) {
+    /// builtinWordsURL 仅测试用(nil = 从 Bundle.main Resources 找 builtin-user-words.json;
+    /// 设置中心 helper bundle 也放了同款资源,先启动的是谁都完成补种)
+    public init(defaults: UserDefaults = .standard, builtinWordsURL: URL? = nil) {
         self.defaults = defaults
         self.counts = defaults.dictionary(forKey: Self.storeKey) as? [String: Int] ?? [:]
         self.pinyins = defaults.dictionary(forKey: Self.pinyinStoreKey) as? [String: String] ?? [:]
@@ -35,6 +50,98 @@ public final class UserFreq {
             for k in bad { pinyins.removeValue(forKey: k) }
             defaults.set(pinyins, forKey: Self.pinyinStoreKey)
         }
+        observeExternalChanges()
+        seedBuiltinWordsIfNeeded(url: builtinWordsURL ?? Bundle.main.url(forResource: "builtin-user-words", withExtension: "json"))
+    }
+
+    deinit {
+        if observing {
+            CFNotificationCenterRemoveEveryObserver(CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque())
+        }
+    }
+
+    /// 设置中心侧改写 defaults 后调用(导入/删除/清空统一出口),引擎重读防复活
+    public static func postExternalChange() {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFNotificationName(externalChangeNotify as CFString),
+                                             nil, nil, true)
+    }
+
+    private func observeExternalChanges() {
+        // C 函数指针闭包不能捕获上下文,实例经 observer 指针回传(deinit 时成对移除)
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                        Unmanaged.passUnretained(self).toOpaque(),
+                                        { _, observer, _, _, _ in
+                                            guard let observer else { return }
+                                            Unmanaged<UserFreq>.fromOpaque(observer).takeUnretainedValue().reloadFromDefaults()
+                                        },
+                                        Self.externalChangeNotify as CFString, nil, .deliverImmediately)
+        observing = true
+    }
+
+    /// 外部(设置中心)改写了 defaults:重读并取消待落盘的防抖保存——内存副本里的未落盘改动
+    /// 会被丢弃(最多丢 2s 防抖窗口内的计数,外部改动优先)
+    private func reloadFromDefaults() {
+        counts = defaults.dictionary(forKey: Self.storeKey) as? [String: Int] ?? [:]
+        pinyins = defaults.dictionary(forKey: Self.pinyinStoreKey) as? [String: String] ?? [:]
+        saveScheduled = false
+        indexDirty = true
+        DebugLog.log("用户词: 收到外部变更,重读 defaults(\(counts.count) 条)")
+    }
+
+    /// 删除墓碑:设置中心删除/清空词时记录,补种时跳过——被用户删掉的词不随种子版本升级复活。
+    /// 对非内置词记墓碑无害(墓碑只被补种读取);defaults 参数化,设置中心写的是 IME suite 域
+    public static func tombstone(words: [String], defaults: UserDefaults) {
+        guard !words.isEmpty else { return }
+        var set = Set(defaults.stringArray(forKey: deletedSeedsKey) ?? [])
+        set.formUnion(words)
+        defaults.set(Array(set), forKey: deletedSeedsKey)
+    }
+
+    /// 导入属显式行为,覆盖墓碑(文件里带回曾删的词 = 用户改主意)
+    public static func untombstone(words: [String], defaults: UserDefaults) {
+        guard !words.isEmpty, let old = defaults.stringArray(forKey: deletedSeedsKey), !old.isEmpty else { return }
+        defaults.set(Array(Set(old).subtracting(words)), forKey: deletedSeedsKey)
+    }
+
+    /// 内置词种子:文件 version > 已种版本才合入;只补缺失词(已有词保本机次数,取文件与本地
+    /// 较大者;拼音仅本地缺省才补),墓碑词(用户删过)一律跳过;文件缺失/损坏不写标记,下次启动重试
+    private func seedBuiltinWordsIfNeeded(url: URL?) {
+        guard let url, let data = try? Data(contentsOf: url),
+              let doc = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = doc["version"] as? Int,
+              let items = doc["words"] as? [[String: Any]] else {
+            DebugLog.log("用户词种子: bundle 无 builtin-user-words.json 或格式不对,跳过")
+            return
+        }
+        guard defaults.integer(forKey: Self.seededVersionKey) < version else { return }
+        let tombstones = Set(defaults.stringArray(forKey: Self.deletedSeedsKey) ?? [])
+        var added = 0, pinyinAdded = 0, tombstoneSkipped = 0
+        for item in items {
+            guard let word = item["word"] as? String, !word.isEmpty, word.count <= Self.maxWordLen,
+                  let count = item["count"] as? Int, count > 0 else { continue }
+            if tombstones.contains(word) {
+                tombstoneSkipped += 1
+                continue
+            }
+            if let existing = counts[word] {
+                if count > existing { counts[word] = count; indexDirty = true }
+            } else {
+                counts[word] = count
+                added += 1
+                indexDirty = true
+            }
+            if pinyins[word] == nil, let p = item["pinyin"] as? String, Self.isValidPinyin(p) {
+                pinyins[word] = p
+                pinyinAdded += 1
+                indexDirty = true
+            }
+        }
+        if counts.count > Self.maxEntries { trim() }
+        defaults.set(counts, forKey: Self.storeKey)
+        defaults.set(pinyins, forKey: Self.pinyinStoreKey)
+        defaults.set(version, forKey: Self.seededVersionKey)
+        DebugLog.log("用户词种子: builtin v\(version) 共 \(items.count) 条,新补词 \(added)/补拼音 \(pinyinAdded)/墓碑跳过 \(tombstoneSkipped)")
     }
 
     /// 候选被选用(空格/数字/点选/分段转换)时计数一次;pinyin 传该词命中的词典键(空格分隔音节),
