@@ -137,6 +137,9 @@ final class InputController: IMKInputController {
             DebugLog.log("水滴松手 → 上屏 idx=\(idx) (fraction=\(String(format: "%.2f", fraction)))")
             self.commitCandidate(at: idx, client: self.client())
         }
+        dropletModel.onPanelShift = { originX in // 固定透镜拖拽:整条 bar(面板)刚体平移
+            Self.lastActive?.candidateWindow.shiftPanel(toOriginX: originX)
+        }
         DebugLog.log("InputController 初始化 client=\(client != nil)")
     }
 

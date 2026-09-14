@@ -18,6 +18,9 @@ public enum UserPrefs {
     public static var fmEnhance: Bool { bool("AFMFMEnhance", default: true) }
     /// 用户词频乘法 + 用户词库最高档(默认开;关 = 词典权重原样,学习数据保留)
     public static var userFreq: Bool { bool("AFMUserFreqEnabled", default: true) }
+    /// 测试:固定透镜拖拽(droplet-relative-motion 支线移植)——拖拽时水滴钉在屏幕抓取点不动,
+    /// 整条候选条(玻璃+字刚体)随手指平移、从水滴下滑过;默认关 = 水滴在条内滑动(kb11 语义)
+    public static var dropletFixedLens: Bool { bool("AFMDropletFixedLens", default: false) }
 
     /// 候选条字号(13-22,默认 16;仅条态生效——网格几何钉死 28/29,字号动它会破坏滚动闭合)
     public static var candidateFontSize: Int {

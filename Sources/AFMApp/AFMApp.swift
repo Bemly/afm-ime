@@ -16,7 +16,7 @@ final class AppModel: ObservableObject {
     static let shared = AppModel()
 
     enum Tab: String, Identifiable, CaseIterable {
-        case install, dict, user, translate, model, settings
+        case install, dict, user, translate, model, test, settings
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
             case .user: return "用户词"
             case .translate: return "翻译"
             case .model: return "模型"
+            case .test: return "测试"
             case .settings: return "设置"
             }
         }
@@ -35,6 +36,7 @@ final class AppModel: ObservableObject {
             case .user: return "person.text.rectangle"
             case .translate: return "translate"
             case .model: return "cpu"
+            case .test: return "flask"
             case .settings: return "switch.2"
             }
         }
@@ -70,6 +72,8 @@ final class AppModel: ObservableObject {
     @Published var fmEnhance: Bool { didSet { write("AFMFMEnhance", fmEnhance) } }
     @Published var userFreqEnabled: Bool { didSet { write("AFMUserFreqEnabled", userFreqEnabled) } }
     @Published var fontSize: Double { didSet { write("AFMCandidateFontSize", Int(fontSize)) } }
+    // 测试:固定透镜拖拽(droplet-relative-motion 支线移植)——键名与 UserPrefs.dropletFixedLens 逐字一致
+    @Published var dropletFixedLens: Bool { didSet { write("AFMDropletFixedLens", dropletFixedLens) } }
     @Published var confirmUninstall = false
     @Published var confirmClear = false
 
@@ -208,6 +212,7 @@ final class AppModel: ObservableObject {
         fmEnhance = d.object(forKey: "AFMFMEnhance") as? Bool ?? true
         userFreqEnabled = d.object(forKey: "AFMUserFreqEnabled") as? Bool ?? true
         fontSize = Double(d.object(forKey: "AFMCandidateFontSize") as? Int ?? 16)
+        dropletFixedLens = d.object(forKey: "AFMDropletFixedLens") as? Bool ?? false
         cloudEnabled = d.object(forKey: ModelPrefs.cloudEnabledKey) as? Bool ?? false
         cloudProvider = d.string(forKey: ModelPrefs.cloudProviderKey) ?? "openai"
         cloudBaseURL = d.string(forKey: ModelPrefs.cloudBaseURLKey) ?? ""
@@ -517,6 +522,7 @@ struct RootView: View {
                 case .user: UserWordsView(model: model)
                 case .translate: TranslateView(model: model)
                 case .model: ModelView(model: model)
+                case .test: TestView(model: model)
                 case .settings: SettingsView(model: model)
                 }
             }
@@ -794,6 +800,25 @@ struct ModelView: View {
                 .frame(height: 64)
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 10).fill(.primary.opacity(0.05)))
+        }
+    }
+}
+
+// MARK: - 测试(实验性交互效果开关)
+
+struct TestView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                GlassCard(title: "水滴拖拽") {
+                    Toggle("固定透镜拖拽(水滴不动,候选条滑过)", isOn: $model.dropletFixedLens)
+                    Text("开:按住水滴后它钉在原地(屏幕固定透镜),整条候选栏(玻璃+文字刚体)随手指平移、从水滴下面滑过,松手上屏水滴正下方的候选。\n关(默认):水滴在候选条内随手指滑动,候选栏不动。\n改动即时生效,下一次按住拖拽即按新模式;此页为实验特性试用区。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
         }
     }
 }
