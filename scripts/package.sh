@@ -10,9 +10,12 @@ security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_ID" || SIGN_I
 
 # 构建: xcodebuild(Xcode 工具链 + macOS 27 SDK,平台基线 platforms: [.macOS("27.0")])。
 # Xcode 缺失/构建失败时回退 swift build(CLT,SDK 同为 27)。
+# 工具链顺序: Xcode-beta.app(27,Swift 6.4)优先——26.x 工具链的 FoundationModels interface 把
+# Provider API 藏在 $AsyncExecutionBehaviorAttributes 特性门后,Swift 6.3.3 编不过(kb36 云端通道
+# "cannot find type LanguageModel");不动全局 xcode-select(开发机可能并行用 26.x 编其他软件)。
 XDEV="${DEVELOPER_DIR:-}"
 if [ -z "$XDEV" ]; then
-  for c in /Applications/Xcode.app/Contents/Developer /Applications/Xcode-beta.app/Contents/Developer; do
+  for c in /Applications/Xcode-beta.app/Contents/Developer /Applications/Xcode.app/Contents/Developer; do
     [ -d "$c" ] && XDEV="$c" && break
   done
 fi
@@ -38,7 +41,7 @@ fi
 # 缺失/编译失败则打包照常,水滴退化为纯玻璃无折射。
 XDEV="${DEVELOPER_DIR:-}"
 if [ -z "$XDEV" ]; then
-  for c in /Applications/Xcode.app/Contents/Developer /Applications/Xcode-beta.app/Contents/Developer; do
+  for c in /Applications/Xcode-beta.app/Contents/Developer /Applications/Xcode.app/Contents/Developer; do
     [ -d "$c" ] && XDEV="$c" && break
   done
 fi

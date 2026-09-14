@@ -72,8 +72,24 @@ public enum IMEInstaller {
             .appendingPathComponent("Library/Input Methods/\(imeAppName)")
     }
 
+    /// 系统级安装位(.pkg 安装器的 payload 目标;/Library 需管理员权限,GUI 换盘不覆盖)
+    public static var systemIMEURL: URL {
+        URL(fileURLWithPath: "/Library/Input Methods/\(imeAppName)")
+    }
+
+    /// 全部在位安装位(用户级 + 系统级;.pkg 装系统级,GUI/脚本装用户级)
+    public static func installedURLs() -> [URL] {
+        [installedIMEURL(), systemIMEURL].filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
     public static func isBundleInstalled() -> Bool {
         FileManager.default.fileExists(atPath: installedIMEURL().path)
+            || FileManager.default.fileExists(atPath: systemIMEURL.path)
+    }
+
+    /// 本机存在系统级安装(.pkg 安装器管理;GUI 的安装/换盘只管用户级,避免装出双份 bundle)
+    public static var isSystemInstalled: Bool {
+        FileManager.default.fileExists(atPath: systemIMEURL.path)
     }
 
     /// 当前状态摘要(供 UI 显示)
@@ -167,6 +183,14 @@ public enum IMEInstaller {
         let ok = writeEnabledEntries()
         log += ok ? "✓ 启用列表已收敛为 1 条\n" : "✗ defaults 写入失败\n"
         return (ok, log)
+    }
+
+    /// 幂等启用(供 .pkg postinstall 等无人值守场景):活视图已有本输入法(≥1 实例)时原样跳过,
+    /// 不触碰 TIS——enable() 的 disableAll 会把正在用的输入源摘掉(部署铁律),升级安装绝不能走;
+    /// 未启用才走 enable()(收敛 + defaults 兜底)
+    public static func ensureEnabled() -> (ok: Bool, log: String) {
+        if enabledRefCount() >= 1 { return (true, "✓ 已启用,跳过(不触碰 TIS 活视图)\n") }
+        return enable()
     }
 
     /// defaults 直写 com.apple.HIToolbox 启用列表:清掉自家(含遗留 id)全部条目后只写一条 mode

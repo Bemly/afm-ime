@@ -11,10 +11,11 @@ if cliArgs.count > 1 {
     case "--enable-input-source": code = Installer.enable()
     case "--select-input-source": code = Installer.select()
     case "--setup": code = Installer.setup() // 单进程连续 register+enable+select,避开 cfprefsd 冲掉瞬态注册
+    case "--ensure-enabled": code = Installer.ensureEnabled() // 幂等启用(pkg postinstall 用,已启用不碰活视图)
     case "--uninstall": code = { print(IMEInstaller.uninstall()); return 0 }()
     case "--quit": code = Installer.quitRunning()
     default:
-        print("用法: AFMInput [--register-input-source|--enable-input-source|--select-input-source|--quit]")
+        print("用法: AFMInput [--register-input-source|--enable-input-source|--ensure-enabled|--select-input-source|--setup|--uninstall|--quit]")
         code = 2
     }
     exit(code)
@@ -23,14 +24,16 @@ if cliArgs.count > 1 {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var server: IMKServer?
     /// 构建标记:日志里区分新旧进程(重装后防 launchd 复活旧二进制)
-    static let buildTag = "20260915-kb38"
+    static let buildTag = "20260915-kb39"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 幽灵副本自愈(必须先于 IMKServer 初始化——副本若用同一连接名起完整引擎,会劫持客户端
         // 的 IMK 连接,退出后连接断掉,表现为全局打不了字,kb32 时代 23:03 事故实锤):
         // 从非安装位置被点击启动时,同步清自己的 LaunchServices 注册后立即退出,不碰任何引擎设施
         if IMEInstaller.isBundleInstalled(),
-           Bundle.main.bundleURL.standardizedFileURL.path != IMEInstaller.installedIMEURL().standardizedFileURL.path {
+           !IMEInstaller.installedURLs().contains(where: {
+               $0.standardizedFileURL.path == Bundle.main.bundleURL.standardizedFileURL.path
+           }) {
             DebugLog.log("幽灵副本启动(\(Bundle.main.bundleURL.path))→ 自清 LaunchServices 注册并退出(不初始化引擎)")
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")

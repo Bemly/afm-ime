@@ -35,6 +35,12 @@ enum Installer {
         return code
     }
 
+    static func ensureEnabled() -> Int32 {
+        let r = IMEInstaller.ensureEnabled()
+        print(r.log, terminator: "")
+        return r.ok ? 0 : 1
+    }
+
     static func quitRunning() -> Int32 {
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: IMEInstaller.bundleID) {
             app.terminate()

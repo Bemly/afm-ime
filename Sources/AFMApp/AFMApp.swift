@@ -403,6 +403,12 @@ final class AppModel: ObservableObject {
 
     func installAndEnable() {
         var l = "———— 安装并启用 ————\n"
+        if IMEInstaller.isSystemInstalled {
+            l += "本机为系统级安装(/Library/Input Methods,由 .pkg 安装器管理)——GUI 只管用户级安装,更新请安装新 .pkg\n"
+            installLog = l + installLog
+            refreshStatus()
+            return
+        }
         if runningFromInstalledLocation {
             l += "本设置中心已运行于安装位置,跳过换盘,直接收敛启用状态\n"
             l += IMEInstaller.enable().log
@@ -425,6 +431,10 @@ final class AppModel: ObservableObject {
     /// 运行于安装位置时没有新包可换,提示走重新打包部署
     func redeploy() {
         var l = "———— 更新输入法 ————\n"
+        if IMEInstaller.isSystemInstalled {
+            installLog = l + "本机为系统级安装(/Library/Input Methods,由 .pkg 安装器管理)——GUI 换盘只管用户级,更新请安装新 .pkg\n" + installLog
+            return
+        }
         let dest = IMEInstaller.installedIMEURL()
         if runningFromInstalledLocation {
             installLog = l + "本设置中心运行于安装位置,没有新包可换——重新 scripts/package.sh 后替换 bundle 即可\n" + installLog
