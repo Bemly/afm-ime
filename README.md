@@ -38,6 +38,7 @@ scripts/package.sh          # xcodebuild(macOS 27 SDK)+ Metal shader → default
 产物 `build/AFM拼音.app` = 输入法引擎 + 内嵌设置中心(`Contents/PlugIns/AFMSettings.app`,顶层只有一个 App 条目)。
 
 - **首次安装**:`open build/AFM拼音.app` → 未安装态自动弹设置中心 → 「安装并启用」(或命令行 `scripts/install.sh`),然后**注销并重新登录一次**(TIS 登录扫描收录);之后装卸永久生效
+- **分发(.pkg)**:`scripts/make_pkg.sh` 出 `build/AFM拼音-<版本>.pkg`——装到系统级 `/Library/Input Methods`(双击安装,管理员授权;首次同样需注销重登一次)。未签名:`sudo installer -pkg AFM拼音-<版本>.pkg -target /` 可直接装;升级安装幂等(已启用不触碰 TIS,无需注销)。已有用户级安装的机器先跑 `AFMInput --uninstall` 再装,避免双份
 - **日常更新(部署铁律)**:重跑 package.sh 后**只做换盘+重启输入法,不要跑 install.sh**(它的 enable 流程会把输入源摘掉):
 
   ```sh
